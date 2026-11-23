@@ -2174,7 +2174,6 @@
  }
 
  const myLogs = logs.filter((l) => l.studentId === currentStudent?.id);
- const visibleLogs = showAllLogs ? myLogs : myLogs.slice(0, 5);
  const myChecklist = checklists[currentStudent?.id] || [];
  const curName = sName(currentStudent);
  const curStop = sStop(currentStudent);
@@ -2447,20 +2446,20 @@
  <div className="flex items-center justify-between gap-2">
  <div className="text-xs font-black text-slate-900">
  {isEn
- ? `💬 ${curName}'s Recent Alerts (${visibleLogs.length}/${myLogs.length})`
- : `💬 ${curName} 어린이 최근 알림 (${visibleLogs.length}/${myLogs.length}건)`}
+ ? `💬 ${curName}'s Recent Alerts (${(showAllLogs ? myLogs : myLogs.slice(0, 10)).length}/${myLogs.length})`
+ : `💬 ${curName} 어린이 최근 알림 (${(showAllLogs ? myLogs : myLogs.slice(0, 10)).length}/${myLogs.length}건)`}
  </div>
  <div className="flex items-center gap-1.5">
- {myLogs.length > 5 && (
+ {myLogs.length > 10 && (
  <button
  type="button"
  onClick={() => setShowAllLogs((prev) => !prev)}
- className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 text-[10px] font-black transition"
+ className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 text-[10px] font-black transition"
  >
  {showAllLogs
  ? isEn
- ? 'Show Top 5'
- : '최근 5건만 보기'
+ ? 'Show Top 10'
+ : '최근 10건만 보기'
  : isEn
  ? `View All (${myLogs.length})`
  : `전체보기 (${myLogs.length})`}
@@ -2491,7 +2490,7 @@
  )}
  </div>
  ) : (
- visibleLogs.map((l) => {
+ (showAllLogs ? myLogs : myLogs.slice(0, 10)).map((l) => {
  const q = resolveQuote(l);
  return (
  <div
