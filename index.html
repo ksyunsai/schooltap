@@ -410,9 +410,13 @@
  }, [lang, isEn]);
 
  const sName = useCallback(
- (stu) => (!stu ? '' : isEn ? stu.nameEn || stu.nameKo : stu.nameKo || stu.nameEn),
- [isEn]
- );
+        (stu) => {
+          if (!stu) return '';
+          if (isEn) return stu.nameEn || stu.nameKo || '';
+          return stu.nameKo || stu.nameEn || '';
+        },
+        [isEn]
+      );
  const sStop = useCallback(
  (stu) =>
  !stu
@@ -685,25 +689,35 @@
  const client = sbClientRef.current;
 
  if (client) {
- setLinkingBusy(true);
- try {
- const { data, error } = await client
- .from('schooltap_students')
- .select('*')
- .eq('invite_code', clean)
- .maybeSingle();
- if (!error && data) {
- matched = mapStudentFromDb(data);
- setStudents((prev) => {
- const exists = prev.some((item) => item.id === matched.id);
- return exists
- ? prev.map((item) => (item.id === matched.id ? matched : item))
- : [...prev, matched];
- });
- }
- } catch (e) {}
- setLinkingBusy(false);
- }
+          setLinkingBusy(true);
+          try {
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .eq('invite_code', clean)
+              .maybeSingle();
+            if (!error && data) {
+              matched = mapStudentFromDb(data);
+              myLinkedIdsRef.current.add(matched.id);
+              setStudents((prev) => {
+                const exists = prev.some((item) => item.id === matched.id);
+                return exists
+                  ? prev.map((item) => (item.id === matched.id ? matched : item))
+                  : [...prev, matched];
+              });
+              const { data: kidLogs } = await client
+                .from('schooltap_ride_logs')
+                .select('*')
+                .eq('student_id', matched.id)
+                .order('tagged_at_ms', { ascending: false })
+                .limit(30);
+              if (Array.isArray(kidLogs)) {
+                kidLogs.forEach((r) => handleIncomingRideLog(r, true));
+              }
+            }
+          } catch (e) {}
+          setLinkingBusy(false);
+        }
 
  if (!matched) {
  playChime('ERROR', soundMuted);
@@ -724,7 +738,8 @@
  setParentRelKey(finalRelKey);
  localStorage.setItem('schooltap_parent_rel', finalRelKey);
 
- setActiveStudentId(matched.id);
+ myLinkedIdsRef.current.add(matched.id);
+        setActiveStudentId(matched.id);
  setInviteCodeInput('');
  setAddSiblingModalOpen(false);
  playChime('BOARD', soundMuted);
@@ -853,8 +868,9 @@
 
  setCloudStatus('CONNECTED');
  const mappedKids = (stuRows || []).map(mapStudentFromDb);
- if (mappedKids.length > 0) {
- setStudents(mappedKids);
+              if (mappedKids.length > 0) {
+                myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
+                setStudents(mappedKids);
  const kidIds = mappedKids.map((k) => k.id);
  const { data: logRows } = await client
  .from('schooltap_ride_logs')
@@ -1602,13 +1618,57 @@
  </div>
 
  {deviceRole === 'PARENT' && (
- <button
- onClick={handleDisconnectParent}
- className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold shrink-0"
- >
- {isEn ? 'Switch Code' : '코드 변경'}
- </button>
- )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const client = sbClientRef.current;
+                        if (!client || parentLinkedCodes.length === 0) {
+                          showToast(isEn ? 'No cloud connection' : '클라우드 연결 상태를 확인해 주세요');
+                          return;
+                        }
+                        const { data: freshKids } = await client
+                          .from('schooltap_students')
+                          .select('*')
+                          .in('invite_code', parentLinkedCodes);
+                        if (Array.isArray(freshKids) && freshKids.length > 0) {
+                          const mapped = freshKids.map(mapStudentFromDb);
+                          myLinkedIdsRef.current = new Set(mapped.map((m) => m.id));
+                          setStudents((prev) => {
+                            const byId = new Map(prev.map((p) => [p.id, p]));
+                            mapped.forEach((m) => byId.set(m.id, m));
+                            return Array.from(byId.values());
+                          });
+                          const kidIds = mapped.map((m) => m.id);
+                          const { data: freshLogs } = await client
+                            .from('schooltap_ride_logs')
+                            .select('*')
+                            .in('student_id', kidIds)
+                            .order('tagged_at_ms', { ascending: false })
+                            .limit(30);
+                          if (Array.isArray(freshLogs)) {
+                            freshLogs.forEach((r) => handleIncomingRideLog(r, true));
+                          }
+                          showToast(
+                            isEn
+                              ? `🔄 Synced latest info for ${sName(mapped[0])}!`
+                              : `🔄 [${sName(mapped[0])}] 최신 원생 정보·알림 동기화 완료!`
+                          );
+                        }
+                      }}
+                      className="px-2 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 text-[11px] font-bold"
+                    >
+                      {isEn ? '🔄 Sync' : '🔄 동기화'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDisconnectParent}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold"
+                    >
+                      {isEn ? 'Switch Code' : '코드 변경'}
+                    </button>
+                  </div>
+                )}
  </div>
 
  <div className="flex items-center justify-between gap-2 pt-2 border-t border-amber-100">
