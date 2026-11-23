@@ -49,8 +49,9 @@
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-    // 기본 Supabase 프로젝트 URL
+    // 기본 Supabase 프로젝트 URL 및 기관 ID
     const DEFAULT_SUPABASE_URL = 'https://vhwdxgpnubmieytjuaaw.supabase.co';
+    const DEFAULT_SCHOOL_ID = 'SCH-001';
 
     // 보호자 호칭 다국어 매핑 (한<->영 전환 시 실시간 자동 번역)
     const RELATION_OPTIONS = [
@@ -72,6 +73,88 @@
       const found = RELATION_OPTIONS.find((r) => r.key === normalizeRelKey(relKey)) || RELATION_OPTIONS[0];
       return lang === 'en' ? found.en : found.ko;
     };
+
+    // DB 행(snake_case) <-> 앱 상태(camelCase) 양방향 매퍼
+    const mapStudentFromDb = (row) => ({
+      id: row.id,
+      schoolId: row.school_id || DEFAULT_SCHOOL_ID,
+      nameKo: row.name_ko || '',
+      nameEn: row.name_en || row.name_ko || '',
+      gradeKo: row.grade_ko || '신규 원생',
+      gradeEn: row.grade_en || 'New Student',
+      stopKo: row.stop_ko || '정문 앞 정류장',
+      stopEn: row.stop_en || row.stop_ko || 'Main Gate Stop',
+      routeId: row.route_id || 'BUS-01',
+      stopLat: typeof row.stop_lat === 'number' ? row.stop_lat : null,
+      stopLng: typeof row.stop_lng === 'number' ? row.stop_lng : null,
+      uid: row.nfc_uid || `UNASSIGNED-${String(row.id || '').slice(-4) || '0000'}`,
+      inviteCode: row.invite_code || '',
+      keyringHex: row.keyring_hex || '#F472B6',
+      avatarEmoji: row.avatar_emoji || '👧🏻',
+      activeSession: row.active_session || null,
+      lastTapMs: Number(row.last_tap_ms) || 0
+    });
+
+    const mapStudentToDb = (stu, schoolId = DEFAULT_SCHOOL_ID) => {
+      const cleanUid = (stu.uid || '').trim().toUpperCase();
+      const isUnassigned = !cleanUid || cleanUid.startsWith('UNASSIGNED-');
+      return {
+        id: stu.id,
+        school_id: stu.schoolId || schoolId,
+        name_ko: stu.nameKo,
+        name_en: stu.nameEn || stu.nameKo,
+        grade_ko: stu.gradeKo || '신규 원생',
+        grade_en: stu.gradeEn || 'New Student',
+        stop_ko: stu.stopKo || '정문 앞 정류장',
+        stop_en: stu.stopEn || stu.stopKo || 'Main Gate Stop',
+        route_id: stu.routeId || 'BUS-01',
+        stop_lat: typeof stu.stopLat === 'number' ? stu.stopLat : null,
+        stop_lng: typeof stu.stopLng === 'number' ? stu.stopLng : null,
+        nfc_uid: isUnassigned ? null : cleanUid,
+        invite_code: (stu.inviteCode || '').trim().toUpperCase(),
+        keyring_hex: stu.keyringHex || '#34D399',
+        avatar_emoji: stu.avatarEmoji || '🧒🏻',
+        active_session: stu.activeSession || null,
+        last_tap_ms: Number(stu.lastTapMs) || 0,
+        updated_at: new Date().toISOString()
+      };
+    };
+
+    const mapLogFromDb = (row) => ({
+      id: row.id,
+      schoolId: row.school_id || DEFAULT_SCHOOL_ID,
+      studentId: row.student_id,
+      studentName: row.student_name || '',
+      vehicleId: row.vehicle_id || 'BUS-01',
+      vehicleNameKo: row.vehicle_name_ko || '',
+      vehicleNameEn: row.vehicle_name_en || '',
+      type: row.event_type,
+      etaMinutes: row.eta_minutes || null,
+      distanceMeters: typeof row.distance_meters === 'number' ? row.distance_meters : null,
+      autoGps: Boolean(row.auto_gps),
+      stopKo: row.stop_ko || '',
+      stopEn: row.stop_en || '',
+      phraseIdx: Number(row.phrase_idx) || 0,
+      tagTimeMs: Number(row.tagged_at_ms) || (row.created_at ? new Date(row.created_at).getTime() : Date.now())
+    });
+
+    const mapLogToDb = (log, schoolId = DEFAULT_SCHOOL_ID) => ({
+      id: log.id,
+      school_id: log.schoolId || schoolId,
+      student_id: log.studentId,
+      student_name: log.studentName || '',
+      vehicle_id: log.vehicleId || 'BUS-01',
+      vehicle_name_ko: log.vehicleNameKo || '',
+      vehicle_name_en: log.vehicleNameEn || '',
+      event_type: log.type,
+      eta_minutes: log.etaMinutes || null,
+      distance_meters: typeof log.distanceMeters === 'number' ? log.distanceMeters : null,
+      auto_gps: Boolean(log.autoGps),
+      stop_ko: log.stopKo || '',
+      stop_en: log.stopEn || '',
+      phrase_idx: Number(log.phraseIdx) || 0,
+      tagged_at_ms: Number(log.tagTimeMs) || Date.now()
+    });
 
     // 지구 곡률 기반 두 GPS 좌표 사이 실제 거리(m) 계산 (Haversine 공식)
     const calcDistanceMeters = (lat1, lng1, lat2, lng2) => {
@@ -232,6 +315,7 @@
     const INITIAL_STUDENTS = [
       {
         id: 'stu-1',
+        schoolId: DEFAULT_SCHOOL_ID,
         nameKo: '김소이',
         nameEn: 'Emma',
         gradeKo: '초등 1학년',
@@ -245,10 +329,12 @@
         inviteCode: 'SOYI-1004',
         keyringHex: '#F472B6',
         avatarEmoji: '👧🏻',
-        activeSession: null
+        activeSession: null,
+        lastTapMs: 0
       },
       {
         id: 'stu-2',
+        schoolId: DEFAULT_SCHOOL_ID,
         nameKo: '윤태하',
         nameEn: 'Leo',
         gradeKo: '유치부 7세',
@@ -262,7 +348,8 @@
         inviteCode: 'TAEHA-7788',
         keyringHex: '#60A5FA',
         avatarEmoji: '👦🏻',
-        activeSession: null
+        activeSession: null,
+        lastTapMs: 0
       }
     ];
 
@@ -293,6 +380,15 @@
         if (r === 'READER') return 'READER';
         return 'ADMIN';
       });
+
+      const schoolId = useMemo(() => {
+        const s = (params.get('schoolId') || '').trim().toUpperCase();
+        if (s) {
+          localStorage.setItem('schooltap_school_id', s);
+          return s;
+        }
+        return localStorage.getItem('schooltap_school_id') || DEFAULT_SCHOOL_ID;
+      }, [params]);
 
       const [lang, setLang] = useState(() => {
         const pLang = params.get('lang');
@@ -360,13 +456,13 @@
       const [cloudModalOpen, setCloudModalOpen] = useState(false);
       const [publicSiteUrl, setPublicSiteUrl] = useState(() => localStorage.getItem('schooltap_public_url') || '');
       const sbClientRef = useRef(null);
-      const seenIdsRef = useRef(new Set());
-      const deviceIdRef = useRef('dev-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6));
+      const seenLogIdsRef = useRef(new Set());
+      const localSelfActionIdsRef = useRef(new Set());
 
-      // 전체 학생 명단
+      // 전체 학생 명단 (오프라인/초기 폴백용 localStorage 캐시 포함)
       const [students, setStudents] = useState(() => {
         try {
-          const saved = localStorage.getItem('schooltap_students_v7');
+          const saved = localStorage.getItem('schooltap_students_v8');
           return saved ? JSON.parse(saved) : INITIAL_STUDENTS;
         } catch (e) {
           return INITIAL_STUDENTS;
@@ -391,6 +487,7 @@
       });
 
       const [inviteCodeInput, setInviteCodeInput] = useState('');
+      const [linkingBusy, setLinkingBusy] = useState(false);
       const [parentRelKey, setParentRelKey] = useState(() =>
         normalizeRelKey(localStorage.getItem('schooltap_parent_rel'))
       );
@@ -474,7 +571,7 @@
 
       useEffect(() => {
         try {
-          localStorage.setItem('schooltap_students_v7', JSON.stringify(students));
+          localStorage.setItem('schooltap_students_v8', JSON.stringify(students));
         } catch (e) {}
       }, [students]);
 
@@ -503,7 +600,77 @@
         };
       };
 
-      const handleConnectChildByCode = (rawCode, relKeyArg) => {
+      // ======================================================================
+      // Supabase 정규화 DB 헬퍼 함수 (단일 행 단위 CRUD)
+      // ======================================================================
+      const syncSingleStudentToDb = useCallback(
+        async (stuObj) => {
+          const client = sbClientRef.current;
+          if (!client || !stuObj) return;
+          try {
+            const payload = mapStudentToDb(stuObj, schoolId);
+            const { error } = await client
+              .from('schooltap_students')
+              .upsert(payload, { onConflict: 'id' });
+            if (!error) {
+              setLastTxDebug(isEn ? '🟢 DB Synced' : '🟢 DB 저장 OK');
+            } else {
+              setLastTxDebug(`🔴 DB오류: ${error.message}`);
+            }
+          } catch (err) {
+            setLastTxDebug(`🔴 통신오류: ${err.message}`);
+          }
+        },
+        [schoolId, isEn]
+      );
+
+      const deleteStudentFromDb = useCallback(
+        async (stuId) => {
+          const client = sbClientRef.current;
+          if (!client || !stuId) return;
+          try {
+            const { error } = await client
+              .from('schooltap_students')
+              .delete()
+              .eq('id', stuId);
+            if (!error) {
+              setLastTxDebug(isEn ? '🟢 Deleted in DB' : '🟢 DB 삭제 OK');
+            } else {
+              setLastTxDebug(`🔴 삭제실패: ${error.message}`);
+            }
+          } catch (err) {}
+        },
+        [isEn]
+      );
+
+      const insertRideLogToDb = useCallback(
+        async (logObj) => {
+          const client = sbClientRef.current;
+          if (!client || !logObj) {
+            setLastTxDebug(isEn ? '⚠️ No API Key' : '⚠️ API 키 미입력');
+            return;
+          }
+          localSelfActionIdsRef.current.add(logObj.id);
+          seenLogIdsRef.current.add(logObj.id);
+          try {
+            const payload = mapLogToDb(logObj, schoolId);
+            const { error } = await client
+              .from('schooltap_ride_logs')
+              .insert(payload);
+            if (!error) {
+              setLastTxDebug(isEn ? '🟢 Alert Sent OK' : '🟢 실시간 전송 OK');
+            } else {
+              setLastTxDebug(`🔴 로그전송실패: ${error.message}`);
+            }
+          } catch (err) {
+            setLastTxDebug(`🔴 네트워크 오류: ${err.message}`);
+          }
+        },
+        [schoolId, isEn]
+      );
+
+      // 학부모 초대코드 검증 및 연결 (Supabase 단건 조회 우선, 오프라인 폴백 지원)
+      const handleConnectChildByCode = async (rawCode, relKeyArg) => {
         const clean = (rawCode || '').trim().toUpperCase();
         if (!clean) {
           showToast(
@@ -513,7 +680,31 @@
           );
           return false;
         }
-        const matched = students.find((s) => (s.inviteCode || '').toUpperCase() === clean);
+
+        let matched = students.find((s) => (s.inviteCode || '').toUpperCase() === clean) || null;
+        const client = sbClientRef.current;
+
+        if (client) {
+          setLinkingBusy(true);
+          try {
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .eq('invite_code', clean)
+              .maybeSingle();
+            if (!error && data) {
+              matched = mapStudentFromDb(data);
+              setStudents((prev) => {
+                const exists = prev.some((item) => item.id === matched.id);
+                return exists
+                  ? prev.map((item) => (item.id === matched.id ? matched : item))
+                  : [...prev, matched];
+              });
+            }
+          } catch (e) {}
+          setLinkingBusy(false);
+        }
+
         if (!matched) {
           playChime('ERROR', soundMuted);
           showToast(
@@ -523,6 +714,7 @@
           );
           return false;
         }
+
         const nextCodes = parentLinkedCodes.includes(clean)
           ? parentLinkedCodes
           : [...parentLinkedCodes, clean];
@@ -556,76 +748,25 @@
         );
       };
 
-      const extractPayloadFromRow = (row) => {
-        if (!row) return null;
-        if (row.payload && typeof row.payload === 'object') return row.payload;
-        if (typeof row.note === 'string' && row.note.trim().startsWith('{')) {
-          try {
-            return JSON.parse(row.note);
-          } catch (e) {}
-        }
-        if (row.eventType && row.studentId) {
-          return {
-            recordKind: 'BUS_EVENT',
-            log: {
-              id: row.id,
-              studentId: row.studentId,
-              type: row.eventType,
-              tagTimeMs: Number(row.taggedAt) || Date.now(),
-              phraseIdx: 0
-            }
-          };
-        }
-        return null;
-      };
-
-      const publishToCloud = useCallback(async (rowId, dataObj) => {
-        const client = sbClientRef.current;
-        if (!client) {
-          setLastTxDebug(isEn ? '⚠️ No API Key on Reader' : '⚠️ 단말기에 API 키 미입력');
-          return;
-        }
-        seenIdsRef.current.add(rowId);
-        const wrapped = { ...dataObj, senderDevice: deviceIdRef.current };
-
-        try {
-          const { error } = await client.from('schooltap_logs').upsert({
-            id: rowId,
-            payload: wrapped
-          });
-
-          if (!error) {
-            setLastTxDebug(isEn ? '🟢 Server Synced OK' : '🟢 서버전송 OK');
-          } else {
-            setLastTxDebug(`🔴 전송실패: ${error.message}`);
-          }
-        } catch (err) {
-          setLastTxDebug(`🔴 네트워크 오류: ${err.message}`);
-        }
-      }, [isEn]);
-
       const myLinkedIdsRef = useRef(new Set());
       useEffect(() => {
         myLinkedIdsRef.current = new Set(myLinkedChildren.map((c) => c.id));
       }, [myLinkedChildren]);
 
-      const handleIncomingCloudData = useCallback(
-        (rowId, parsed, isHistory = false) => {
-          if (!rowId || !parsed || seenIdsRef.current.has(rowId)) return;
-          seenIdsRef.current.add(rowId);
-
-          if (parsed.recordKind === 'STUDENT_SYNC' && Array.isArray(parsed.students)) {
-            setStudents(parsed.students);
-            return;
-          }
-
-          const incomingLog = parsed.log;
-          if (!incomingLog || !incomingLog.type) return;
+      // 실시간 수신 로그 처리 핸들러
+      const handleIncomingRideLog = useCallback(
+        (rawRow, isHistory = false) => {
+          if (!rawRow || !rawRow.id) return;
+          const incomingLog = rawRow.event_type ? mapLogFromDb(rawRow) : rawRow;
+          if (!incomingLog.type) return;
 
           setLogs((prev) => {
             if (prev.some((l) => l.id === incomingLog.id)) return prev;
             return [incomingLog, ...prev].sort((a, b) => b.tagTimeMs - a.tagTimeMs);
           });
+
+          if (seenLogIdsRef.current.has(incomingLog.id)) return;
+          seenLogIdsRef.current.add(incomingLog.id);
 
           setStudents((prev) =>
             prev.map((s) => {
@@ -651,7 +792,7 @@
 
           if (
             !isHistory &&
-            parsed.senderDevice !== deviceIdRef.current &&
+            !localSelfActionIdsRef.current.has(incomingLog.id) &&
             isShowingParentScreen &&
             myLinkedIdsRef.current.has(incomingLog.studentId)
           ) {
@@ -667,6 +808,11 @@
         [deviceRole, adminTab, approachingEnabled, tapBubbleEnabled, soundMuted]
       );
 
+      // ======================================================================
+      // Supabase 초기 데이터 1회 로드 + 선택적 Realtime 구독 (폴링 제거)
+      // ======================================================================
+      const linkedCodesKey = useMemo(() => parentLinkedCodes.slice().sort().join(','), [parentLinkedCodes]);
+
       useEffect(() => {
         if (!sbUrl || !sbKey || !window.supabase) {
           setCloudStatus('IDLE');
@@ -678,72 +824,174 @@
         sbClientRef.current = client;
 
         let active = true;
-        client
-          .from('schooltap_logs')
-          .select('id')
-          .limit(1)
-          .then(({ error }) => {
-            if (!active) return;
-            if (!error) {
-              setCloudStatus('CONNECTED');
-            } else {
-              console.warn('Supabase check error:', error);
-              setCloudStatus('ERROR');
-            }
-          });
 
-        const channel = client
-          .channel('schooltap-realtime-v9')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'schooltap_logs' }, (chg) => {
-            if (!active) return;
-            setCloudStatus('CONNECTED');
-            if (chg?.new) {
-              handleIncomingCloudData(chg.new.id, extractPayloadFromRow(chg.new), false);
-            }
-          })
-          .subscribe((status) => {
-            if (!active) return;
-            if (status === 'SUBSCRIBED') {
-              setCloudStatus('CONNECTED');
-            }
-          });
-
-        const poll = setInterval(async () => {
+        // 1. 초기 상태 1회 조회 (역할별 최소 데이터만 조회)
+        const bootstrapData = async () => {
           try {
-            let { data, error } = await client
-              .from('schooltap_logs')
-              .select('*')
-              .order('created_at', { ascending: false })
-              .limit(15);
+            if (deviceRole === 'PARENT') {
+              const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
+              if (codes.length === 0) {
+                const { error: pingErr } = await client
+                  .from('schooltap_schools')
+                  .select('id')
+                  .limit(1);
+                if (!active) return;
+                setCloudStatus(pingErr ? 'ERROR' : 'CONNECTED');
+                return;
+              }
 
-            if (error) {
-              const fallback = await client.from('schooltap_logs').select('*').limit(30);
-              data = fallback.data;
-              error = fallback.error;
-            }
+              const { data: stuRows, error: stuErr } = await client
+                .from('schooltap_students')
+                .select('*')
+                .in('invite_code', codes);
 
-            if (!active) return;
-            if (!error && Array.isArray(data)) {
+              if (!active) return;
+              if (stuErr) {
+                setCloudStatus('ERROR');
+                return;
+              }
+
               setCloudStatus('CONNECTED');
-              data
-                .slice()
-                .reverse()
-                .forEach((r) => {
-                  const parsed = extractPayloadFromRow(r);
-                  const ts = parsed?.log?.tagTimeMs || parsed?.syncedAt || 0;
-                  const isOld = Date.now() - ts > 45000;
-                  handleIncomingCloudData(r.id, parsed, isOld);
-                });
+              const mappedKids = (stuRows || []).map(mapStudentFromDb);
+              if (mappedKids.length > 0) {
+                setStudents(mappedKids);
+                const kidIds = mappedKids.map((k) => k.id);
+                const { data: logRows } = await client
+                  .from('schooltap_ride_logs')
+                  .select('*')
+                  .in('student_id', kidIds)
+                  .order('tagged_at_ms', { ascending: false })
+                  .limit(30);
+
+                if (active && Array.isArray(logRows)) {
+                  logRows.forEach((r) => handleIncomingRideLog(r, true));
+                }
+              }
+            } else {
+              // ADMIN 또는 READER: 해당 학원(schoolId) 원생 명단 1회 조회
+              const { data: stuRows, error: stuErr } = await client
+                .from('schooltap_students')
+                .select('*')
+                .eq('school_id', schoolId)
+                .order('id', { ascending: true });
+
+              if (!active) return;
+              if (stuErr) {
+                setCloudStatus('ERROR');
+                return;
+              }
+
+              setCloudStatus('CONNECTED');
+              if (Array.isArray(stuRows) && stuRows.length > 0) {
+                setStudents(stuRows.map(mapStudentFromDb));
+              } else if (Array.isArray(stuRows) && stuRows.length === 0) {
+                // DB가 비어 있는 최초 테스트 시 시드 원생 자동 등록
+                const seedRows = INITIAL_STUDENTS.map((s) => mapStudentToDb(s, schoolId));
+                await client.from('schooltap_students').upsert(seedRows, { onConflict: 'id' });
+                if (active) setStudents(INITIAL_STUDENTS);
+              }
+
+              const { data: logRows } = await client
+                .from('schooltap_ride_logs')
+                .select('*')
+                .eq('school_id', schoolId)
+                .order('tagged_at_ms', { ascending: false })
+                .limit(30);
+
+              if (active && Array.isArray(logRows)) {
+                logRows.forEach((r) => handleIncomingRideLog(r, true));
+              }
             }
-          } catch (e) {}
-        }, 1500);
+          } catch (e) {
+            if (active) setCloudStatus('ERROR');
+          }
+        };
+
+        bootstrapData();
+
+        // 2. 실시간(Realtime) 채널 구독
+        const channel = client.channel(`schooltap-norm-${deviceRole}-${schoolId}-${Date.now()}`);
+
+        if (deviceRole === 'PARENT') {
+          const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
+          if (codes.length > 0) {
+            // 학부모 앱은 본인 자녀의 이벤트 및 상태 변경만 수신
+            channel.on(
+              'postgres_changes',
+              { event: 'INSERT', schema: 'public', table: 'schooltap_ride_logs' },
+              (chg) => {
+                if (!active || !chg?.new) return;
+                if (myLinkedIdsRef.current.has(chg.new.student_id)) {
+                  handleIncomingRideLog(chg.new, false);
+                }
+              }
+            );
+            channel.on(
+              'postgres_changes',
+              { event: 'UPDATE', schema: 'public', table: 'schooltap_students' },
+              (chg) => {
+                if (!active || !chg?.new) return;
+                if (myLinkedIdsRef.current.has(chg.new.id)) {
+                  const updatedKid = mapStudentFromDb(chg.new);
+                  setStudents((prev) =>
+                    prev.map((s) => (s.id === updatedKid.id ? updatedKid : s))
+                  );
+                }
+              }
+            );
+          }
+        } else {
+          // 관리자 / 버스 단말기는 해당 학원의 원생 변경 및 로그를 실시간 동기화
+          channel.on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'schooltap_students',
+              filter: `school_id=eq.${schoolId}`
+            },
+            (chg) => {
+              if (!active) return;
+              if (chg.eventType === 'DELETE' && chg.old?.id) {
+                setStudents((prev) => prev.filter((s) => s.id !== chg.old.id));
+              } else if (chg.new?.id) {
+                const mapped = mapStudentFromDb(chg.new);
+                setStudents((prev) => {
+                  const exists = prev.some((s) => s.id === mapped.id);
+                  return exists
+                    ? prev.map((s) => (s.id === mapped.id ? mapped : s))
+                    : [...prev, mapped];
+                });
+              }
+            }
+          );
+          channel.on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'schooltap_ride_logs',
+              filter: `school_id=eq.${schoolId}`
+            },
+            (chg) => {
+              if (!active || !chg?.new) return;
+              handleIncomingRideLog(chg.new, false);
+            }
+          );
+        }
+
+        channel.subscribe((status) => {
+          if (!active) return;
+          if (status === 'SUBSCRIBED') {
+            setCloudStatus('CONNECTED');
+          }
+        });
 
         return () => {
           active = false;
-          clearInterval(poll);
           client.removeChannel(channel);
         };
-      }, [sbUrl, sbKey, handleIncomingCloudData]);
+      }, [sbUrl, sbKey, deviceRole, schoolId, linkedCodesKey, handleIncomingRideLog]);
 
       // 도착 예정 알림 발송 공통 함수
       const sendApproachingAlert = useCallback(
@@ -754,6 +1002,7 @@
           const etaVal = customEtaMins || activePreset.etaMins || approachingMins;
           const etaLog = {
             id: `eta-${target.id}-${nowMs}`,
+            schoolId,
             studentId: target.id,
             studentName: target.nameKo,
             vehicleId: currentBusObj.id,
@@ -770,7 +1019,7 @@
           };
           etaSentLockRef.current[target.id] = true;
           setLogs((prev) => [etaLog, ...prev]);
-          publishToCloud(etaLog.id, { recordKind: 'BUS_EVENT', log: etaLog });
+          insertRideLogToDb(etaLog);
           playChime('APPROACHING_10M', soundMuted);
 
           setReaderBanner({
@@ -792,8 +1041,9 @@
           students,
           activePreset,
           approachingMins,
+          schoolId,
           currentBusObj,
-          publishToCloud,
+          insertRideLogToDb,
           soundMuted,
           isEn,
           sName,
@@ -888,25 +1138,27 @@
         });
       }, [busCoords, gpsTracking, students, runDirection, currentBusObj, activePreset, sendApproachingAlert]);
 
-      // 현위치 정류장 좌표 수동 지정
+      // 현위치 정류장 좌표 수동 지정 (해당 학생 1행만 UPDATE)
       const pinCurrentGpsToStudent = (stuId) => {
         const saveCoords = (lat, lng) => {
-          const updated = students.map((s) =>
-            s.id === stuId ? { ...s, stopLat: lat, stopLng: lng } : s
-          );
+          let updatedTarget = null;
+          const updated = students.map((s) => {
+            if (s.id === stuId) {
+              updatedTarget = { ...s, stopLat: lat, stopLng: lng };
+              return updatedTarget;
+            }
+            return s;
+          });
           delete etaSentLockRef.current[stuId];
           setStudents(updated);
-          publishToCloud(`stu-sync-${Date.now()}`, {
-            recordKind: 'STUDENT_SYNC',
-            students: updated,
-            syncedAt: Date.now()
-          });
-          const target = updated.find((s) => s.id === stuId);
-          showToast(
-            isEn
-              ? `📌 Saved current GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) as ${sName(target)}'s stop!`
-              : `📌 현재 위치(${lat.toFixed(4)}, ${lng.toFixed(4)})가 [${sName(target)}] 정류장으로 저장되었습니다!`
-          );
+          if (updatedTarget) {
+            syncSingleStudentToDb(updatedTarget);
+            showToast(
+              isEn
+                ? `📌 Saved current GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) as ${sName(updatedTarget)}'s stop!`
+                : `📌 현재 위치(${lat.toFixed(4)}, ${lng.toFixed(4)})가 [${sName(updatedTarget)}] 정류장으로 저장되었습니다!`
+            );
+          }
         };
 
         if (busCoords) {
@@ -939,7 +1191,7 @@
         }
       };
 
-      // 갤럭시 실물 NFC 단독 개통 (단일 선언)
+      // 갤럭시 실물 NFC 단독 개통
       const startGalaxyNfcScanner = async () => {
         if (!('NDEFReader' in window)) {
           showToast(
@@ -978,7 +1230,7 @@
         }
       };
 
-      // NFC 태그 인식 엔진
+      // NFC 태그 인식 엔진 (로그 INSERT + 해당 원생 1행 UPDATE)
       const handleTagUidRef = useRef(null);
       const handleTagUid = useCallback(
         (rawUid) => {
@@ -1009,7 +1261,7 @@
             return;
           }
 
-          const stu = students.find((s) => s.uid.toUpperCase() === cleanUid);
+          const stu = students.find((s) => (s.uid || '').toUpperCase() === cleanUid);
 
           if (!stu) {
             playChime('ERROR', soundMuted);
@@ -1048,33 +1300,29 @@
             busCoords &&
             (typeof stu.stopLat !== 'number' || typeof stu.stopLng !== 'number');
 
+          const updatedStudent = {
+            ...stu,
+            stopLat: shouldAutoPin ? busCoords.lat : stu.stopLat,
+            stopLng: shouldAutoPin ? busCoords.lng : stu.stopLng,
+            activeSession:
+              actionType === 'BOARD'
+                ? { boardTimeMs: nowMs, vehicleId: currentBusObj.id }
+                : null,
+            lastTapMs: nowMs
+          };
+
           const updatedList = students.map((item) =>
-            item.id === stu.id
-              ? {
-                  ...item,
-                  stopLat: shouldAutoPin ? busCoords.lat : item.stopLat,
-                  stopLng: shouldAutoPin ? busCoords.lng : item.stopLng,
-                  activeSession:
-                    actionType === 'BOARD'
-                      ? { boardTimeMs: nowMs, vehicleId: currentBusObj.id }
-                      : null,
-                  lastTapMs: nowMs
-                }
-              : item
+            item.id === stu.id ? updatedStudent : item
           );
           setStudents(updatedList);
           setUnregisteredUid('');
 
-          if (shouldAutoPin) {
-            publishToCloud(`stu-sync-${nowMs}`, {
-              recordKind: 'STUDENT_SYNC',
-              students: updatedList,
-              syncedAt: nowMs
-            });
-          }
+          // 해당 학생 1행만 DB 업데이트
+          syncSingleStudentToDb(updatedStudent);
 
           const newLog = {
             id: `tap-${stu.id}-${nowMs}`,
+            schoolId,
             studentId: stu.id,
             studentName: stu.nameKo,
             vehicleId: currentBusObj.id,
@@ -1088,7 +1336,7 @@
           };
 
           setLogs((prev) => [newLog, ...prev]);
-          publishToCloud(newLog.id, { recordKind: 'BUS_EVENT', log: newLog });
+          insertRideLogToDb(newLog);
 
           playChime(actionType, soundMuted);
           const dispName = sName(stu);
@@ -1110,7 +1358,7 @@
 
           setReaderBanner({
             type: actionType,
-            student: stu,
+            student: updatedStudent,
             autoPinned: shouldAutoPin,
             timeMs: nowMs
           });
@@ -1125,7 +1373,9 @@
           autoPinEnabled,
           busCoords,
           currentBusObj,
-          publishToCloud,
+          schoolId,
+          syncSingleStudentToDb,
+          insertRideLogToDb,
           sName,
           showToast
         ]
@@ -1135,10 +1385,15 @@
         handleTagUidRef.current = handleTagUid;
       }, [handleTagUid]);
 
-      // 미등록 스티커 원터치 매칭 함수 (중복 UID 자동 해제 포함)
-      const bindStickerToStudent = (targetStuId) => {
+      // 미등록 스티커 원터치 매칭 함수 (중복 UID DB 선해제 후 이전)
+      const bindStickerToStudent = async (targetStuId) => {
         if (!unregisteredUid) return;
         const boundUid = unregisteredUid;
+
+        const prevOwners = students.filter(
+          (s) => s.id !== targetStuId && s.uid && s.uid.toUpperCase() === boundUid.toUpperCase()
+        );
+
         const updatedList = students.map((s) => {
           if (s.id === targetStuId) return { ...s, uid: boundUid };
           if (s.uid && s.uid.toUpperCase() === boundUid.toUpperCase()) {
@@ -1147,12 +1402,16 @@
           return s;
         });
         setStudents(updatedList);
-        publishToCloud(`stu-sync-${Date.now()}`, {
-          recordKind: 'STUDENT_SYNC',
-          students: updatedList,
-          syncedAt: Date.now()
-        });
+
+        for (const oldStu of prevOwners) {
+          await syncSingleStudentToDb({
+            ...oldStu,
+            uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+          });
+        }
         const target = updatedList.find((s) => s.id === targetStuId);
+        if (target) await syncSingleStudentToDb(target);
+
         setUnregisteredUid('');
         playChime('BOARD', soundMuted);
         showToast(
@@ -1182,7 +1441,7 @@
       const canShowPublicQr = Boolean(sbKey) && (!isGoogleSandbox || Boolean(publicSiteUrl.trim()));
 
       const buildRoleUrl = (roleType, inviteCodeOpt = '') => {
-        let u = `${effectiveBaseUrl}?role=${roleType}&lang=${lang}&sbUrl=${encodeURIComponent(sbUrl)}&sbKey=${encodeURIComponent(sbKey)}`;
+        let u = `${effectiveBaseUrl}?role=${roleType}&schoolId=${encodeURIComponent(schoolId)}&lang=${lang}&sbUrl=${encodeURIComponent(sbUrl)}&sbKey=${encodeURIComponent(sbKey)}`;
         if (inviteCodeOpt) {
           u += `&invite=${encodeURIComponent(inviteCodeOpt)}`;
         }
@@ -1262,9 +1521,16 @@
                   />
                   <button
                     type="submit"
-                    className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-sm shadow-md active:scale-98 transition"
+                    disabled={linkingBusy}
+                    className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 disabled:opacity-60 text-slate-950 font-black text-sm shadow-md active:scale-98 transition"
                   >
-                    {isEn ? '🔑 Link My Child & Start Alerts' : '🔑 우리 아이 연결하고 알림 받기'}
+                    {linkingBusy
+                      ? isEn
+                        ? 'Checking Code...'
+                        : '초대코드 확인 중...'
+                      : isEn
+                      ? '🔑 Link My Child & Start Alerts'
+                      : '🔑 우리 아이 연결하고 알림 받기'}
                   </button>
                 </form>
 
@@ -2003,23 +2269,25 @@
                 </button>
               </div>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!newStuName.trim()) return;
                   const cleanName = newStuName.trim();
                   const finalUid = (newStuUid.trim() || '04:' + Math.floor(10 + Math.random() * 89) + ':AA:01').toUpperCase();
-                  const duplicateOwner = students.find((s) => (s.uid || '').toUpperCase() === finalUid);
+                  const duplicateOwners = students.filter((s) => (s.uid || '').toUpperCase() === finalUid);
 
-                  if (duplicateOwner) {
+                  if (duplicateOwners.length > 0) {
+                    const ownerNames = duplicateOwners.map((o) => sName(o)).join(', ');
                     const ok = window.confirm(
                       isEn
-                        ? `NFC UID (${finalUid}) is already assigned to [${sName(duplicateOwner)}]. Transfer it to [${cleanName}] and unassign from [${sName(duplicateOwner)}]?`
-                        : `입력하신 NFC 고유번호(${finalUid})는 이미 [${sName(duplicateOwner)}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전하고 기존 등록은 미배정 처리할까요?`
+                        ? `NFC UID (${finalUid}) is already assigned to [${ownerNames}]. Transfer it to [${cleanName}] and unassign from [${ownerNames}]?`
+                        : `입력하신 NFC 고유번호(${finalUid})는 이미 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전하고 기존 등록은 미배정 처리할까요?`
                     );
                     if (!ok) return;
                   }
 
                   const added = {
                     id: 'stu-' + Date.now(),
+                    schoolId,
                     nameKo: cleanName,
                     nameEn: cleanName,
                     gradeKo: '신규 원생',
@@ -2033,7 +2301,8 @@
                     inviteCode: 'TAP-' + Math.floor(1000 + Math.random() * 9000),
                     keyringHex: '#34D399',
                     avatarEmoji: '🧒🏻',
-                    activeSession: null
+                    activeSession: null,
+                    lastTapMs: 0
                   };
 
                   const cleanedPrev = students.map((s) =>
@@ -2043,11 +2312,16 @@
                   );
                   const nextList = [...cleanedPrev, added];
                   setStudents(nextList);
-                  publishToCloud(`stu-sync-${Date.now()}`, {
-                    recordKind: 'STUDENT_SYNC',
-                    students: nextList,
-                    syncedAt: Date.now()
-                  });
+
+                  // DB 유니크 인덱스 충돌 방지를 위해 기존 소유자 먼저 미배정 UPDATE 후 신규 INSERT
+                  for (const oldStu of duplicateOwners) {
+                    await syncSingleStudentToDb({
+                      ...oldStu,
+                      uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+                    });
+                  }
+                  await syncSingleStudentToDb(added);
+
                   setNewStuName('');
                   setNewStuStop('');
                   setNewStuUid('');
@@ -2070,7 +2344,7 @@
                   : '등록된 어린이 · 정류장 GPS 상태 · 부모님 초대코드'}
               </div>
               {students.map((s) => {
-                const isUnassigned = (s.uid || '').startsWith('UNASSIGNED-');
+                const isUnassigned = !s.uid || (s.uid || '').startsWith('UNASSIGNED-');
                 return (
                   <div key={s.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs">
                     <div className="space-y-1 min-w-0">
@@ -2120,7 +2394,7 @@
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             const ok = window.confirm(
                               isEn
                                 ? `Delete student [${sName(s)}] permanently?`
@@ -2129,11 +2403,7 @@
                             if (!ok) return;
                             const nextList = students.filter((item) => item.id !== s.id);
                             setStudents(nextList);
-                            publishToCloud(`stu-sync-${Date.now()}`, {
-                              recordKind: 'STUDENT_SYNC',
-                              students: nextList,
-                              syncedAt: Date.now()
-                            });
+                            await deleteStudentFromDb(s.id);
                             showToast(
                               isEn
                                 ? `🗑️ Deleted ${sName(s)}.`
@@ -2350,7 +2620,7 @@
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!editName.trim()) return;
                       const cleanName = editName.trim();
                       const cleanStop = editStop.trim() || '정문 앞 정류장';
@@ -2359,18 +2629,19 @@
                         'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
                       ).toUpperCase();
 
-                      const duplicateOwner = students.find(
+                      const duplicateOwners = students.filter(
                         (s) =>
                           s.id !== editingStudent.id &&
                           !finalUid.startsWith('UNASSIGNED-') &&
                           (s.uid || '').toUpperCase() === finalUid
                       );
 
-                      if (duplicateOwner) {
+                      if (duplicateOwners.length > 0) {
+                        const ownerNames = duplicateOwners.map((o) => sName(o)).join(', ');
                         const ok = window.confirm(
                           isEn
-                            ? `NFC UID (${finalUid}) is currently assigned to [${sName(duplicateOwner)}]. Transfer it to [${cleanName}] and unassign from [${sName(duplicateOwner)}]?`
-                            : `이 NFC 고유번호(${finalUid})는 현재 [${sName(duplicateOwner)}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이로 이전하고 기존 매핑을 해제할까요?`
+                            ? `NFC UID (${finalUid}) is currently assigned to [${ownerNames}]. Transfer it to [${cleanName}] and unassign from [${ownerNames}]?`
+                            : `이 NFC 고유번호(${finalUid})는 현재 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이로 이전하고 기존 매핑을 해제할까요?`
                         );
                         if (!ok) return;
                       }
@@ -2379,19 +2650,19 @@
                         delete etaSentLockRef.current[editingStudent.id];
                       }
 
+                      const editedObj = {
+                        ...editingStudent,
+                        nameKo: cleanName,
+                        nameEn: cleanName,
+                        stopKo: cleanStop,
+                        stopEn: cleanStop,
+                        uid: finalUid,
+                        stopLat: editResetGps ? null : editingStudent.stopLat,
+                        stopLng: editResetGps ? null : editingStudent.stopLng
+                      };
+
                       const updatedList = students.map((s) => {
-                        if (s.id === editingStudent.id) {
-                          return {
-                            ...s,
-                            nameKo: cleanName,
-                            nameEn: cleanName,
-                            stopKo: cleanStop,
-                            stopEn: cleanStop,
-                            uid: finalUid,
-                            stopLat: editResetGps ? null : s.stopLat,
-                            stopLng: editResetGps ? null : s.stopLng
-                          };
-                        }
+                        if (s.id === editingStudent.id) return editedObj;
                         if (
                           !finalUid.startsWith('UNASSIGNED-') &&
                           (s.uid || '').toUpperCase() === finalUid
@@ -2405,17 +2676,21 @@
                       });
 
                       setStudents(updatedList);
-                      publishToCloud(`stu-sync-${Date.now()}`, {
-                        recordKind: 'STUDENT_SYNC',
-                        students: updatedList,
-                        syncedAt: Date.now()
-                      });
+
+                      for (const oldStu of duplicateOwners) {
+                        await syncSingleStudentToDb({
+                          ...oldStu,
+                          uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+                        });
+                      }
+                      await syncSingleStudentToDb(editedObj);
+
                       setEditingStudent(null);
                       setCapturingUidForEdit(false);
                       showToast(
                         isEn
-                          ? `✅ Updated [${cleanName}] & synced across devices!`
-                          : `✅ [${cleanName}] 정보가 수정되고 클라우드에 동기화되었습니다!`
+                          ? `✅ Updated [${cleanName}] & saved to DB!`
+                          : `✅ [${cleanName}] 정보가 수정되고 DB에 저장되었습니다!`
                       );
                     }}
                     className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs"
@@ -2553,8 +2828,8 @@
                     <div className="p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-300 space-y-2 mt-2">
                       <div className="text-xs font-black text-rose-900">
                         {isEn
-                          ? '⚠️ Enter your public Netlify HTTPS URL (e.g., https://clinquant-fox-d6e283.netlify.app)'
-                          : '⚠️ Netlify에 올린 공개 주소(예: https://clinquant-fox-d6e283.netlify.app)를 입력해 주세요'}
+                          ? '⚠️ Enter your public GitHub Pages URL (e.g., https://ksyunsai.github.io/schooltap)'
+                          : '⚠️ GitHub Pages 공개 주소(예: https://ksyunsai.github.io/schooltap)를 입력해 주세요'}
                       </div>
                       <input
                         type="url"
@@ -2563,7 +2838,7 @@
                           setPublicSiteUrl(e.target.value);
                           localStorage.setItem('schooltap_public_url', e.target.value.trim());
                         }}
-                        placeholder="https://clinquant-fox-d6e283.netlify.app"
+                        placeholder="https://ksyunsai.github.io/schooltap"
                         className="w-full px-3 py-2 rounded-xl border-2 border-rose-400 bg-white font-mono text-xs"
                       />
                     </div>
@@ -2575,7 +2850,7 @@
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
                       <div className="text-xs font-black text-amber-950 text-center">
                         {isEn
-                          ? '📸 QR links automatically open in US English & hide admin menus on Parent phones!'
+                          ? '📸 QR links automatically hide admin menus on Parent phones!'
                           : '📸 부모님 폰(2번)에서는 관리자 메뉴가 완전히 숨겨지고 초대코드 입력창이 뜹니다!'}
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-center">
@@ -2721,8 +2996,8 @@
                             : '🟢 실시간 안심 버블 & GPS 알림 켜짐'
                           : cloudStatus === 'ERROR'
                           ? isEn
-                            ? '🔴 API Key Error (Tap to Fix)'
-                            : '🔴 API 키 오류 (여기를 눌러 키 입력)'
+                            ? '🔴 DB / API Key Error (Tap to Fix)'
+                            : '🔴 DB / API 키 오류 (여기를 눌러 확인)'
                           : isEn
                           ? '🟡 Tap here to enter API Key'
                           : '🟡 여기를 눌러 API 키 연결'
@@ -2731,8 +3006,8 @@
                           ? 'Auto NFC + Live GPS Geofence'
                           : '무인 NFC 스캔 + 실시간 GPS 감시'
                         : isEn
-                        ? 'School & Fleet Management Mode'
-                        : 'PC / 사업주 통합 관리 모드'}
+                        ? `School & Fleet Management (${schoolId})`
+                        : `PC / 사업주 통합 관리 모드 (${schoolId})`}
                     </span>
                   </div>
                 </div>
