@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="SchoolTap" />
   <title>SchoolTap™ | 통학 안심 버블 알림</title>
-  <!-- 동적 PWA Manifest 주입 (홈 화면 앱 설치 지원) -->
+  <!-- 동적 PWA Manifest 주입 -->
   <script>
     (function () {
       try {
@@ -536,13 +536,13 @@
       const seenLogIdsRef = useRef(new Set());
       const localSelfActionIdsRef = useRef(new Set());
 
-      // 전체 학생 명단
+      // 전체 학생 명단 (클라우드 연결 시에는 DB가 최우선 진실의 원천!)
       const [students, setStudents] = useState(() => {
         try {
-          const saved = localStorage.getItem('schooltap_students_v8');
-          return saved ? JSON.parse(saved) : INITIAL_STUDENTS;
+          const saved = localStorage.getItem('schooltap_students_v9');
+          return saved ? JSON.parse(saved) : [];
         } catch (e) {
-          return INITIAL_STUDENTS;
+          return [];
         }
       });
 
@@ -684,13 +684,13 @@
 
       useEffect(() => {
         try {
-          localStorage.setItem('schooltap_students_v8', JSON.stringify(students));
+          localStorage.setItem('schooltap_students_v9', JSON.stringify(students));
         } catch (e) {}
       }, [students]);
 
       const showToast = useCallback((msg) => {
         setToast(msg);
-        setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
+        setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3800);
       }, []);
 
       const formatTime = (ms) =>
@@ -800,7 +800,14 @@
       const syncSingleStudentToDb = useCallback(
         async (stuObj) => {
           const client = sbClientRef.current;
-          if (!client || !stuObj) return;
+          if (!client || !stuObj) {
+            showToast(
+              isEn
+                ? '⚠️ Saved locally only — enter Supabase API Key first!'
+                : '⚠️ 클라우드 API 키가 없어 현재 기기에만 저장되었습니다!'
+            );
+            return false;
+          }
           try {
             const payload = mapStudentToDb(stuObj, schoolId);
             const { error } = await client
@@ -808,20 +815,24 @@
               .upsert(payload, { onConflict: 'id' });
             if (!error) {
               setLastTxDebug(isEn ? '🟢 DB Synced' : '🟢 DB 저장 OK');
+              return true;
             } else {
               setLastTxDebug(`🔴 DB오류: ${error.message}`);
+              showToast(`🔴 DB 저장 실패: ${error.message}`);
+              return false;
             }
           } catch (err) {
             setLastTxDebug(`🔴 통신오류: ${err.message}`);
+            return false;
           }
         },
-        [schoolId, isEn]
+        [schoolId, isEn, showToast]
       );
 
       const deleteStudentFromDb = useCallback(
         async (stuId) => {
           const client = sbClientRef.current;
-          if (!client || !stuId) return;
+          if (!client || !stuId) return false;
           try {
             const { error } = await client
               .from('schooltap_students')
@@ -829,12 +840,17 @@
               .eq('id', stuId);
             if (!error) {
               setLastTxDebug(isEn ? '🟢 Deleted in DB' : '🟢 DB 삭제 OK');
+              return true;
             } else {
               setLastTxDebug(`🔴 삭제실패: ${error.message}`);
+              showToast(`🔴 DB 삭제 실패: ${error.message}`);
+              return false;
             }
-          } catch (err) {}
+          } catch (err) {
+            return false;
+          }
         },
-        [isEn]
+        [isEn, showToast]
       );
 
       const insertRideLogToDb = useCallback(
@@ -962,7 +978,45 @@
         ]
       );
 
-      // 학부모 초대코드 검증 및 연결 (Supabase 단건 조회 우선 + 즉시 동기화)
+      // DB에서 최신 학생 명단 전체 또는 특정 코드들을 즉시 가져와 state를 완벽히 덮어쓰는 핵심 동기화 함수
+      const fetchFreshStudentsFromDb = useCallback(
+        async (clientInstance, codesFilter = null) => {
+          const client = clientInstance || sbClientRef.current;
+          if (!client) return null;
+
+          if (Array.isArray(codesFilter) && codesFilter.length > 0) {
+            const upperCodes = codesFilter.map((c) => c.trim().toUpperCase());
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .in('invite_code', upperCodes);
+            if (error) throw error;
+            const mapped = (data || []).map(mapStudentFromDb);
+            myLinkedIdsRef.current = new Set(mapped.map((m) => m.id));
+            // 삭제되었거나 수정된 상태를 그대로 반영하기 위해 해당 코드 기준 목록을 최신 DB 결과로 교체
+            setStudents((prev) => {
+              const otherCached = prev.filter(
+                (p) => !upperCodes.includes((p.inviteCode || '').trim().toUpperCase())
+              );
+              return [...mapped, ...otherCached];
+            });
+            return mapped;
+          } else {
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .eq('school_id', schoolId)
+              .order('id', { ascending: true });
+            if (error) throw error;
+            const mapped = (data || []).map(mapStudentFromDb);
+            setStudents(mapped);
+            return mapped;
+          }
+        },
+        [schoolId]
+      );
+
+      // 학부모 초대코드 검증 및 연결
       const handleConnectChildByCode = async (rawCode, relKeyArg) => {
         const clean = (rawCode || '').trim().toUpperCase();
         if (!clean) {
@@ -974,8 +1028,8 @@
           return false;
         }
 
-        let matched = students.find((s) => (s.inviteCode || '').trim().toUpperCase() === clean) || null;
         const client = sbClientRef.current;
+        let matched = null;
 
         if (client) {
           setLinkingBusy(true);
@@ -989,10 +1043,8 @@
               matched = mapStudentFromDb(data);
               myLinkedIdsRef.current.add(matched.id);
               setStudents((prev) => {
-                const exists = prev.some((item) => item.id === matched.id);
-                return exists
-                  ? prev.map((item) => (item.id === matched.id ? matched : item))
-                  : [...prev, matched];
+                const filtered = prev.filter((item) => item.id !== matched.id);
+                return [matched, ...filtered];
               });
               const { data: kidLogs } = await client
                 .from('schooltap_ride_logs')
@@ -1006,14 +1058,17 @@
             }
           } catch (e) {}
           setLinkingBusy(false);
+        } else {
+          matched =
+            students.find((s) => (s.inviteCode || '').trim().toUpperCase() === clean) || null;
         }
 
         if (!matched) {
           playChime('ERROR', soundMuted);
           showToast(
             isEn
-              ? '❌ Invalid invite code. Please check the code provided by your school!'
-              : '❌ 일치하는 초대코드가 없습니다. 학원에서 받은 코드를 다시 확인해 주세요!'
+              ? '❌ Invalid or deleted invite code. Please check with your school!'
+              : '❌ 존재하지 않거나 삭제된 초대코드입니다. 학원에서 받은 코드를 다시 확인해 주세요!'
           );
           return false;
         }
@@ -1045,7 +1100,7 @@
         return true;
       };
 
-      // 학부모 화면 수동 강제 동기화 버튼 핸들러 (시각적 피드백 & 에러 안내 강화)
+      // 학부모 화면 수동 강제 동기화 버튼 핸들러
       const handleManualParentSync = async () => {
         if (syncingBusy) return;
         const client = sbClientRef.current;
@@ -1067,43 +1122,20 @@
         }
 
         setSyncingBusy(true);
-        showToast(isEn ? '🔄 Syncing latest student info...' : '🔄 최신 원생 정보와 알림을 불러오는 중...');
+        showToast(isEn ? '🔄 Syncing latest student info...' : '🔄 DB에서 최신 원생 정보와 알림을 불러오는 중...');
 
         try {
-          const upperCodes = parentLinkedCodes.map((c) => c.trim().toUpperCase());
-          const { data: freshKids, error: stuErr } = await client
-            .from('schooltap_students')
-            .select('*')
-            .in('invite_code', upperCodes);
+          const mapped = await fetchFreshStudentsFromDb(client, parentLinkedCodes);
 
-          if (stuErr) {
+          if (!Array.isArray(mapped) || mapped.length === 0) {
             showToast(
               isEn
-                ? `❌ DB Sync Error: ${stuErr.message}`
-                : `❌ 동기화 오류: ${stuErr.message}`
+                ? '⚠️ Student record not found in DB (may have been deleted by Admin).'
+                : '⚠️ DB에서 해당 초대코드 원생을 찾지 못했습니다 (관리자 화면에서 삭제되었거나 미저장 상태).'
             );
             setSyncingBusy(false);
             return;
           }
-
-          if (!Array.isArray(freshKids) || freshKids.length === 0) {
-            showToast(
-              isEn
-                ? '⚠️ Student record not found in DB. Check if Admin saved changes.'
-                : '⚠️ DB에서 해당 초대코드 원생을 찾지 못했습니다. 원장님 콘솔에서 수정 저장을 먼저 눌러주세요!'
-            );
-            setSyncingBusy(false);
-            return;
-          }
-
-          const mapped = freshKids.map(mapStudentFromDb);
-          myLinkedIdsRef.current = new Set(mapped.map((m) => m.id));
-
-          setStudents((prev) => {
-            const byId = new Map(prev.map((p) => [p.id, p]));
-            mapped.forEach((m) => byId.set(m.id, m));
-            return Array.from(byId.values());
-          });
 
           const kidIds = mapped.map((m) => m.id);
           const { data: freshLogs } = await client
@@ -1127,8 +1159,8 @@
         } catch (err) {
           showToast(
             isEn
-              ? `❌ Network Error: ${err.message}`
-              : `❌ 네트워크 오류: ${err.message}`
+              ? `❌ Sync Error: ${err.message}`
+              : `❌ 동기화 오류: ${err.message}`
           );
         } finally {
           setSyncingBusy(false);
@@ -1140,25 +1172,17 @@
         localStorage.removeItem('schooltap_parent_codes');
         setPopupLog(null);
 
-        // 코드 변경 화면의 샘플 버튼들도 최신 DB 이름을 보여주도록 1회 갱신
         const client = sbClientRef.current;
         if (client) {
           try {
-            const { data } = await client
-              .from('schooltap_students')
-              .select('*')
-              .eq('school_id', schoolId)
-              .order('id', { ascending: true });
-            if (Array.isArray(data) && data.length > 0) {
-              setStudents(data.map(mapStudentFromDb));
-            }
+            await fetchFreshStudentsFromDb(client, null);
           } catch (e) {}
         }
 
         showToast(
           isEn
             ? 'Unlinked. Enter a new invite code to connect another student.'
-            : '연결이 해제되었습니다. 새로운 초대코드로 다시 연결해 보세요.'
+            : '연결이 해제되었습니다. 최신 명단을 불러왔습니다.'
         );
       };
 
@@ -1184,21 +1208,18 @@
             if (deviceRole === 'PARENT') {
               const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
               if (codes.length === 0) {
-                // 초대코드 입력 전이라도 샘플 목록이 최신 DB 이름을 반영하도록 조회
                 const { data: previewRows, error: pingErr } = await client
                   .from('schooltap_students')
                   .select('*')
                   .eq('school_id', schoolId)
                   .order('id', { ascending: true })
-                  .limit(10);
+                  .limit(20);
                 if (!active) return;
                 if (pingErr) {
                   setCloudStatus('ERROR');
                 } else {
                   setCloudStatus('CONNECTED');
-                  if (Array.isArray(previewRows) && previewRows.length > 0) {
-                    setStudents(previewRows.map(mapStudentFromDb));
-                  }
+                  setStudents((previewRows || []).map(mapStudentFromDb));
                 }
                 return;
               }
@@ -1216,13 +1237,10 @@
 
               setCloudStatus('CONNECTED');
               const mappedKids = (stuRows || []).map(mapStudentFromDb);
+              myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
+              setStudents(mappedKids);
+
               if (mappedKids.length > 0) {
-                myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
-                setStudents((prev) => {
-                  const byId = new Map(prev.map((p) => [p.id, p]));
-                  mappedKids.forEach((m) => byId.set(m.id, m));
-                  return Array.from(byId.values());
-                });
                 const kidIds = mappedKids.map((k) => k.id);
                 const { data: logRows } = await client
                   .from('schooltap_ride_logs')
@@ -1301,6 +1319,31 @@
                     prev.map((s) => (s.id === updatedKid.id ? updatedKid : s))
                   );
                 }
+              }
+            );
+            channel.on(
+              'postgres_changes',
+              { event: 'DELETE', schema: 'public', table: 'schooltap_students' },
+              (chg) => {
+                if (!active || !chg?.old?.id) return;
+                if (myLinkedIdsRef.current.has(chg.old.id)) {
+                  myLinkedIdsRef.current.delete(chg.old.id);
+                  setStudents((prev) => prev.filter((s) => s.id !== chg.old.id));
+                }
+              }
+            );
+          } else {
+            // 코드 입력 대기 화면에서도 관리자 변경사항(이름 수정/삭제) 즉시 반영
+            channel.on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'schooltap_students',
+                filter: `school_id=eq.${schoolId}`
+              },
+              () => {
+                if (active) bootstrapData();
               }
             );
           }
@@ -1905,10 +1948,31 @@
                 </form>
 
                 <div className="pt-3 border-t border-slate-100 space-y-2">
-                  <div className="text-[11px] font-bold text-slate-400">
-                    {isEn
-                      ? '💡 Quick Demo: Tap a sample invite code below'
-                      : '💡 등록된 초대코드 바로 눌러서 연결해보기'}
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
+                    <span>
+                      {isEn
+                        ? '💡 Quick Demo: Tap a registered code'
+                        : '💡 등록된 초대코드 바로 눌러서 연결해보기'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const client = sbClientRef.current;
+                        if (!client) {
+                          showToast(isEn ? '⚠️ API Key required' : '⚠️ API 키가 연결되지 않았습니다');
+                          return;
+                        }
+                        const list = await fetchFreshStudentsFromDb(client, null);
+                        showToast(
+                          isEn
+                            ? `🔄 Refreshed (${list?.length || 0} students)`
+                            : `🔄 최신 명단(${list?.length || 0}명) 불러오기 완료`
+                        );
+                      }}
+                      className="text-amber-700 underline font-black"
+                    >
+                      {isEn ? '🔄 Refresh List' : '🔄 명단 새로고침'}
+                    </button>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     {students.slice(0, 6).map((s) => (
@@ -2039,7 +2103,7 @@
                   </div>
                 </div>
 
-                {deviceRole === 'PARENT' && (
+                {(deviceRole === 'PARENT' || adminTab === 'PARENT_PREVIEW') && (
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       type="button"
@@ -2057,13 +2121,15 @@
                         ? '🔄 Sync'
                         : '🔄 동기화'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleDisconnectParent}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold"
-                    >
-                      {isEn ? 'Switch Code' : '코드 변경'}
-                    </button>
+                    {deviceRole === 'PARENT' && (
+                      <button
+                        type="button"
+                        onClick={handleDisconnectParent}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold"
+                      >
+                        {isEn ? 'Switch Code' : '코드 변경'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -3139,15 +3205,17 @@
                           uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
                         });
                       }
-                      await syncSingleStudentToDb(editedObj);
+                      const savedOk = await syncSingleStudentToDb(editedObj);
 
                       setEditingStudent(null);
                       setCapturingUidForEdit(false);
-                      showToast(
-                        isEn
-                          ? `✅ Updated [${cleanName}] & saved to DB!`
-                          : `✅ [${cleanName}] 정보가 수정되고 DB에 저장되었습니다!`
-                      );
+                      if (savedOk) {
+                        showToast(
+                          isEn
+                            ? `✅ Updated [${cleanName}] & saved to DB!`
+                            : `✅ [${cleanName}] 정보가 수정되고 DB에 저장되었습니다!`
+                        );
+                      }
                     }}
                     className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs"
                   >
