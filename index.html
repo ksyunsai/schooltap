@@ -40,9 +40,6 @@
  } catch (e) {}
  })();
  </script>
- <!-- Leaflet Free OpenStreetMap CSS & JS -->
- <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
- <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
  <!-- Tailwind CSS & Supabase & React CDN -->
  <script src="https://cdn.tailwindcss.com"></script>
  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -78,10 +75,6 @@
  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
  70% { box-shadow: 0 0 0 24px rgba(16, 185, 129, 0); }
  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
- }
- .leaflet-container {
- font-family: 'Pretendard', sans-serif;
- z-index: 10;
  }
  </style>
 </head>
@@ -325,6 +318,11 @@
  tone(783.99, now + 0.09, 0.09);
  tone(987.77, now + 0.18, 0.11, 'sine');
  tone(1174.66, now + 0.28, 0.26, 'sine', 0.24);
+ } else if (type === 'NO_ALIGHT_1H') {
+ tone(880.0, now, 0.14, 'triangle', 0.25);
+ tone(659.25, now + 0.16, 0.14, 'triangle', 0.25);
+ tone(880.0, now + 0.34, 0.14, 'triangle', 0.25);
+ tone(1046.5, now + 0.50, 0.28, 'sine', 0.26);
  } else {
  tone(330, now, 0.12, 'sawtooth', 0.14);
  tone(262, now + 0.13, 0.18, 'sawtooth', 0.14);
@@ -345,115 +343,59 @@
  } catch (e) {}
  };
 
-     // 한·영 10종 랜덤 감성 버블 멘트 풀 (승차 / 하차 / 도착 예정 / 1시간 하차 미태그 안내)
-    const QUOTES = {
-      BOARD: {
-        ko: [
-          { emoji: '🚌💨', title: '엄마! 저 방금 {vehicle}에 탔어요!', sub: '가방 키링 삑! 찍고 안전하게 앉았어요 💛' },
-          { emoji: '🎒✨', title: '출발 준비 끝! 방금 승차 확인됐어요!', sub: '{vehicle}에서 친구들이랑 인사하고 있어요 👋' },
-          { emoji: '🚀🌈', title: '스쿨탭 로켓 탑승 성공! 출발합니다!', sub: '오늘도 씩씩하게 잘 다녀올게요 🌟' },
-          { emoji: '🐥🎶', title: '삐약삐약! 저 버스에 안전하게 올라탔어요!', sub: '내릴 때도 잊지 않고 꼭 찍을게요 😉' },
-          { emoji: '🐻💛', title: '오늘도 안전벨트 찰칵! {vehicle} 탑승 완료!', sub: '기사님께 반갑게 인사하고 자리에 앉았어요 😊' },
-          { emoji: '🌻🚌', title: '기분 좋은 출발! 방금 버스에 잘 올라탔어요!', sub: '가방 키링이 예쁘게 삑! 하고 반겨줬어요 ✨' },
-          { emoji: '🍀🎈', title: '안전 승차 체크 완료! 지금 출발해요~', sub: '창밖 구경하면서 즐겁게 이동하고 있어요 🎶' },
-          { emoji: '🐰🌟', title: '깡총! {vehicle}에 무사히 탑승했습니다!', sub: '가방도 잘 챙기고 안전하게 자리에 앉았어요 💛' },
-          { emoji: '🎨🚌', title: '스쿨탭 체크인 완료! 오늘도 씩씩하게 출발!', sub: '도착해서 내릴 때도 야무지게 태그할게요 👍' },
-          { emoji: '🌈😊', title: '엄마 안심하세요! 저 방금 {vehicle} 탔어요!', sub: '친구들과 웃으며 안전하게 이동 중이에요 🚌💛' }
-        ],
-        en: [
-          { emoji: '🚌💨', title: 'Hopped on {vehicle}! See you later!', sub: 'Tapped my backpack charm & buckled up 💛' },
-          { emoji: '🎒✨', title: 'All aboard! Just tapped onto the bus!', sub: 'Saying hi to my friends on {vehicle} 👋' },
-          { emoji: '🚀🌈', title: 'SchoolTap rocket launched! Safely on board!', sub: 'Heading off with a big smile today 🌟' },
-          { emoji: '🐥🎶', title: 'Safely on the bus and seated!', sub: 'I will tap again when I hop off 😉' },
-          { emoji: '🐻💛', title: 'Buckled up! Just boarded {vehicle}!', sub: 'Said hello to the driver and found my seat 😊' },
-          { emoji: '🌻🚌', title: 'Happy ride ahead! Boarding confirmed!', sub: 'My backpack tag beeped loud and clear ✨' },
-          { emoji: '🍀🎈', title: 'Checked in safely! We are rolling now~', sub: 'Enjoying the window view on {vehicle} 🎶' },
-          { emoji: '🐰🌟', title: 'Hopped right onto {vehicle} safely!', sub: 'Backpack secured and ready for the trip 💛' },
-          { emoji: '🎨🚌', title: 'SchoolTap check-in done! Off we go!', sub: 'I will make sure to tap when I get off too 👍' },
-          { emoji: '🌈😊', title: 'All good! Just got on {vehicle}!', sub: 'Smiling with friends and riding safely 🚌💛' }
-        ]
-      },
-      ALIGHT: {
-        ko: [
-          { emoji: '🏫✨', title: '얏호! 무사히 도착해서 잘 내렸어요!', sub: '{vehicle}에서 반갑게 인사하고 하차 완료 🎉' },
-          { emoji: '🎒🎉', title: '안전 착륙 성공! 방금 버스에서 내렸어요!', sub: '가방도 잘 메고 키링도 야무지게 찍었어요 💛' },
-          { emoji: '🌈💛', title: '도착 완료! 오늘도 씩씩하게 잘 왔어요!', sub: '하차 시각이 정확히 기록되었어요 ✅' },
-          { emoji: '🐰🎀', title: '깡총! 버스에서 내려서 걸어가고 있어요!', sub: '안전하게 내렸으니 마음 놓으세요 😊' },
-          { emoji: '🌟👏', title: '하차 태그 삑! 오늘도 스스로 잘 해냈어요!', sub: '{vehicle}에서 안전하게 내려 이동 중이에요 💛' },
-          { emoji: '🏡🌷', title: '무사 도착! 방금 버스에서 내렸습니다!', sub: '가방 챙겨서 씩씩하게 발걸음을 옮겼어요 ✨' },
-          { emoji: '🧸💫', title: '안전하게 하차 완료! 걱정 놓으세요~', sub: '정확한 하차 확인 버블이 도착했어요 🎈' },
-          { emoji: '🐥🌻', title: '도착했어요! {vehicle}에서 잘 내렸습니다!', sub: '끝까지 안전하게 하차 태그까지 완료했어요 👏' },
-          { emoji: '🎈😊', title: '방금 하차 확인! 오늘도 즐거운 이동이었어요!', sub: '소지품도 잘 챙기고 안전하게 내렸어요 💛' },
-          { emoji: '🍀🏫', title: '하차 체크아웃 완료! 무사히 도착했어요!', sub: '언제나 안심할 수 있도록 정확히 알려드려요 ✅' }
-        ],
-        en: [
-          { emoji: '🏫✨', title: 'Woohoo! Made it safe and sound!', sub: 'Tapped off {vehicle} with a big smile 🎉' },
-          { emoji: '🎒🎉', title: 'Touchdown! Just hopped off the bus!', sub: 'Backpack on and charm tapped cleanly 💛' },
-          { emoji: '🌈💛', title: 'Safely arrived! Drop-off confirmed!', sub: 'Exact exit scan logged on {vehicle} ✅' },
-          { emoji: '🐰🎀', title: 'Hopped off the bus & heading inside!', sub: 'Rest easy—your rider is safely off 😊' },
-          { emoji: '🌟👏', title: 'Exit tap complete! Did it all by myself!', sub: 'Stepped off {vehicle} safely and heading in 💛' },
-          { emoji: '🏡🌷', title: 'Arrived safely! Just stepped off the bus!', sub: 'Got my backpack and walking safely now ✨' },
-          { emoji: '🧸💫', title: 'Safe drop-off logged! All clear~', sub: 'Your arrival bubble has just been delivered 🎈' },
-          { emoji: '🐥🌻', title: 'Made it! Safely off {vehicle}!', sub: 'Remembered my exit scan right on time 👏' },
-          { emoji: '🎈😊', title: 'Exit confirmed! Smooth ride today!', sub: 'All belongings packed and safely off the bus 💛' },
-          { emoji: '🍀🏫', title: 'Checked out safely! Arrived right on time!', sub: 'Keeping you posted every step of the way ✅' }
-        ]
-      },
-      APPROACHING_10M: {
-        ko: [
-          { emoji: '📍🚌', title: '엄마! 버스가 약 {eta}분 뒤에 [{stop}]에 도착해요!', sub: '슬슬 신발 신고 마중 나올 준비해 주세요 💛' },
-          { emoji: '⏰👟', title: '딩동! {vehicle} 도착 {eta}분 전 알림이에요!', sub: '곧 [{stop}] 정류장 모퉁이를 돌아요 ✨' },
-          { emoji: '💛🚏', title: '약 {eta}분 후 [{stop}] 정류장 도착 예정이에요!', sub: '여유 있게 나와 주시면 반갑게 만날 수 있어요 😊' },
-          { emoji: '🌤️🚌', title: '{vehicle}가 [{stop}] 쪽으로 다가오고 있어요!', sub: '도착까지 약 {eta}분 정도 남았어요 🎈' },
-          { emoji: '🎶⏰', title: '곧 만나요! [{stop}] 도착 약 {eta}분 전입니다!', sub: '안전하게 운행하며 정류장으로 이동 중이에요 💛' },
-          { emoji: '🐣📍', title: '삐약! 약 {eta}분 뒤면 [{stop}]에 도착해요!', sub: '정류장에서 반갑게 맞이해 주세요 🌟' },
-          { emoji: '🚌✨', title: '도착 알림! {vehicle}가 약 {eta}분 후 도착해요!', sub: '[{stop}] 정류장 부근으로 순조롭게 오고 있어요 👍' },
-          { emoji: '🌷👟', title: '마중 준비 시간! [{stop}]까지 약 {eta}분 남았어요!', sub: '곧 문이 열리고 씩씩하게 내릴 거예요 😊' },
-          { emoji: '🧭💛', title: '{vehicle} 접근 중! [{stop}] 도착 약 {eta}분 전!', sub: '늦지 않게 미리 알려드리는 안심 버블이에요 ✨' },
-          { emoji: '🌈🚏', title: '잠시 후 약 {eta}분 뒤 [{stop}] 정류장에 닿아요!', sub: '오늘도 안전하게 정류장까지 모셔다드려요 🚌' }
-        ],
-        en: [
-          { emoji: '📍🚌', title: 'Heads up! {vehicle} is ~{eta} mins from {stop}!', sub: 'Perfect time to head out to the bus stop 💛' },
-          { emoji: '⏰👟', title: 'Ding-dong! About {eta} minutes until {stop}!', sub: 'Grab your keys—the yellow bus is approaching ✨' },
-          { emoji: '💛🚏', title: 'Arriving at {stop} in roughly {eta} minutes!', sub: 'Heading your way smoothly and safely 😊' },
-          { emoji: '🌤️🚌', title: '{vehicle} is getting close to {stop}!', sub: 'Estimated arrival in about {eta} minutes 🎈' },
-          { emoji: '🎶⏰', title: 'See you soon! ~{eta} mins away from {stop}!', sub: 'Cruising safely toward your stop right now 💛' },
-          { emoji: '🐣📍', title: 'Almost there! About {eta} mins until {stop}!', sub: 'Ready to meet your rider at the stop 🌟' },
-          { emoji: '🚌✨', title: 'ETA Update: {vehicle} is ~{eta} mins out!', sub: 'Approaching the {stop} area right on schedule 👍' },
-          { emoji: '🌷👟', title: 'Time to head out! ~{eta} mins to {stop}!', sub: 'Your child will be hopping off shortly 😊' },
-          { emoji: '🧭💛', title: '{vehicle} approaching {stop} (~{eta} mins)!', sub: 'A friendly heads-up so you never have to rush ✨' },
-          { emoji: '🌈🚏', title: 'Just ~{eta} minutes until {vehicle} reaches {stop}!', sub: 'Bringing your rider home safely 🚌' }
-        ]
-      },
-      NO_ALIGHT_1H: {
-        ko: [
-          { emoji: '🏷️💭', title: '하차 태그를 깜빡한 것 같아요! 아이에게 확인해 보세요 😊', sub: '승차 후 1시간 동안 하차 기록이 없어요. 잘 도착했는지 가볍게 확인해 보시는 걸 권장드려요 💛' },
-          { emoji: '🎒✨', title: '하차 키링 태그가 누락된 것 같아요!', sub: '승차 후 1시간이 지났지만 하차 태그가 찍히지 않았어요. 아이에게 도착 여부를 확인해 보세요 😊' },
-          { emoji: '💛🚌', title: '앗, 내리면서 키링 찍는 걸 잊은 것 같아요!', sub: '탑승 후 1시간 동안 하차 기록이 확인되지 않았어요. 아이와 통화나 메시지로 확인해 보시는 걸 권장해요 🌷' },
-          { emoji: '🧸🔔', title: '하차 태그 미확인 안내 · 아이에게 확인해 보세요!', sub: '즐겁게 내리느라 태그를 깜빡했을 수 있어요. 잘 도착했는지 가볍게 확인해 주세요 💛' },
-          { emoji: '🌤️🏷️', title: '하차 기록이 아직 없어요 — 태그를 잊은 것 같아요!', sub: '승차 후 1시간이 경과했어요. 아이에게 무사히 도착했는지 확인해 보시는 걸 권장드립니다 😊' },
-          { emoji: '🐰💡', title: '키링 하차 태그가 찍히지 않았어요!', sub: '바쁘게 내리면서 태그를 놓친 것 같아요. 아이에게 잘 도착했는지 한 번 확인해 보세요 💛' },
-          { emoji: '🍀🚌', title: '안심 확인 안내 · 하차 태그가 누락되었어요!', sub: '탑승 후 1시간 동안 하차 기록이 없어요. 태그를 잊은 것 같으니 아이에게 확인해 보시는 걸 권장해요 ✨' },
-          { emoji: '🐥💬', title: '하차 태그를 깜빡하고 내린 것 같아요!', sub: '승차 후 1시간이 지나 알려드려요. 아이에게 잘 들어갔는지 가볍게 확인해 보세요 😊' },
-          { emoji: '🎈🏷️', title: '하차 미태그 안내 — 아이에게 도착을 확인해 보세요!', sub: '가방 키링이 스치지 않고 내린 것 같아요. 안전하게 도착했는지 확인해 보시는 걸 권장드려요 💛' },
-          { emoji: '🌷😊', title: '하차 태그가 아직 기록되지 않았어요!', sub: '승차 후 1시간이 지났어요. 내리면서 태그를 잊은 것 같으니 아이에게 확인해 보시길 권장해요 🚌' }
-        ],
-        en: [
-          { emoji: '🏷️💭', title: 'Looks like the exit tap was missed — please check with your child 😊', sub: 'No drop-off scan was recorded within 1 hour of boarding. We recommend checking in to confirm arrival 💛' },
-          { emoji: '🎒✨', title: 'Exit charm scan may have been forgotten!', sub: 'It has been 1 hour since boarding without an exit scan. Please check with your child when convenient 😊' },
-          { emoji: '💛🚌', title: 'Oops, looks like your child forgot to tap off!', sub: 'No drop-off scan logged 1 hour after boarding. We recommend a quick check-in with your child 🌷' },
-          { emoji: '🧸🔔', title: 'Missing Exit Scan Reminder · Check with your child!', sub: 'They may have hopped off in a hurry without tapping. A quick check-in is recommended 💛' },
-          { emoji: '🌤️🏷️', title: 'No exit scan yet — looks like the tap was missed!', sub: '1 hour has passed since boarding. We recommend checking with your child to make sure they arrived 😊' },
-          { emoji: '🐰💡', title: 'Backpack charm exit tap wasn’t recorded!', sub: 'Your child likely forgot to tap while getting off. Please check in with them when you can 💛' },
-          { emoji: '🍀🚌', title: 'Friendly Check-In · Exit scan appears missed!', sub: 'No drop-off log within 1 hour of boarding. We recommend confirming arrival with your child ✨' },
-          { emoji: '🐥💬', title: 'Looks like your rider forgot to tap on the way out!', sub: 'Sharing a gentle reminder after 1 hour — please check with your child to confirm arrival 😊' },
-          { emoji: '🎈🏷️', title: 'Exit Scan Missed — Please check in with your child!', sub: 'The charm may not have touched the reader on exit. We recommend verifying with your child 💛' },
-          { emoji: '🌷😊', title: 'Drop-off scan hasn’t been logged yet!', sub: 'It has been 1 hour since boarding. Your child may have forgotten to tap — please check with them 🚌' }
-        ]
-      }
-    };
+ // 한·영 랜덤 감성 버블 멘트 풀
+ const QUOTES = {
+ BOARD: {
+ ko: [
+ { emoji: '🚌💨', title: '엄마! 저 방금 {vehicle}에 탔어요!', sub: '가방 키링 삑! 찍고 안전하게 앉았어요 💛' },
+ { emoji: '🎒✨', title: '출발 준비 끝! 방금 승차 확인됐어요!', sub: '{vehicle}에서 친구들이랑 인사하고 있어요 👋' },
+ { emoji: '🚀🌈', title: '스쿨탭 로켓 탑승 성공! 출발합니다!', sub: '오늘도 씩씩하게 잘 다녀올게요 🌟' },
+ { emoji: '🐥🎶', title: '삐약삐약! 저 버스에 안전하게 올라탔어요!', sub: '내릴 때도 잊지 않고 꼭 찍을게요 😉' }
+ ],
+ en: [
+ { emoji: '🚌💨', title: 'Hopped on {vehicle}! See you later!', sub: 'Tapped my backpack charm & buckled up 💛' },
+ { emoji: '🎒✨', title: 'All aboard! Just tapped onto the bus!', sub: 'Saying hi to my friends on {vehicle} 👋' },
+ { emoji: '🚀🌈', title: 'SchoolTap rocket launched! Safely on board!', sub: 'Heading off with a big smile today 🌟' },
+ { emoji: '🐥🎶', title: 'Safely on the bus and seated!', sub: 'I will tap again when I hop off 😉' }
+ ]
+ },
+ ALIGHT: {
+ ko: [
+ { emoji: '🏫✨', title: '얏호! 무사히 도착해서 잘 내렸어요!', sub: '{vehicle}에서 반갑게 인사하고 하차 완료 🎉' },
+ { emoji: '🎒🎉', title: '안전 착륙 성공! 방금 버스에서 내렸어요!', sub: '가방도 잘 메고 키링도 야무지게 찍었어요 💛' },
+ { emoji: '🌈💛', title: '도착 완료! 오늘도 씩씩하게 잘 왔어요!', sub: '하차 시각이 정확히 기록되었어요 ✅' },
+ { emoji: '🐰🎀', title: '깡총! 버스에서 내려서 걸어가고 있어요!', sub: '안전하게 내렸으니 마음 놓으세요 😊' }
+ ],
+ en: [
+ { emoji: '🏫✨', title: 'Woohoo! Made it safe and sound!', sub: 'Tapped off {vehicle} with a big smile 🎉' },
+ { emoji: '🎒🎉', title: 'Touchdown! Just hopped off the bus!', sub: 'Backpack on and charm tapped cleanly 💛' },
+ { emoji: '🌈💛', title: 'Safely arrived! Drop-off confirmed!', sub: 'Exact exit scan logged on {vehicle} ✅' },
+ { emoji: '🐰🎀', title: 'Hopped off the bus & heading inside!', sub: 'Rest easy—your rider is safely off 😊' }
+ ]
+ },
+ APPROACHING_10M: {
+ ko: [
+ { emoji: '📍🚌', title: '엄마! 버스가 약 {eta}분 뒤에 [{stop}]에 도착해요!', sub: '슬슬 신발 신고 마중 나올 준비해 주세요 💛' },
+ { emoji: '⏰👟', title: '딩동! {vehicle} 도착 {eta}분 전 알림이에요!', sub: '곧 [{stop}] 정류장 모퉁이를 돌아요 ✨' }
+ ],
+ en: [
+ { emoji: '📍🚌', title: 'Heads up! {vehicle} is ~{eta} mins from {stop}!', sub: 'Perfect time to head out to the bus stop 💛' },
+ { emoji: '⏰👟', title: 'Ding-dong! About {eta} minutes until {stop}!', sub: 'Grab your keys—the yellow bus is approaching ✨' }
+ ]
+ },
+ NO_ALIGHT_1H: {
+ ko: [
+ { emoji: '🚨🚌', title: '안전 확인 필요! 승차 후 1시간 동안 하차 태그가 없어요!', sub: '{vehicle} 탑승 후 아직 하차 기록이 확인되지 않았습니다. 기사님·학원에 바로 확인해 주세요!' },
+ { emoji: '⚠️🔔', title: '하차 미태그 알림! 탑승 후 1시간이 지났어요!', sub: '내리면서 키링을 안 찍었는지, 차량 내 안전 확인을 부탁드립니다 🙏' }
+ ],
+ en: [
+ { emoji: '🚨🚌', title: 'Safety Check! No drop-off scan 1 hour after boarding!', sub: 'No exit scan logged on {vehicle} yet. Please check with the driver or school!' },
+ { emoji: '⚠️🔔', title: 'Missing Exit Scan Alert! 1 hour since boarding!', sub: 'Your child may have forgotten to tap off—please verify safe arrival 🙏' }
+ ]
+ }
+ };
 
-    const BUS_ROUTES = [
+ const BUS_ROUTES = [
  { id: 'BUS-01', nameKo: '1호차 노란버스', nameEn: 'Route #14 Yellow Bus' },
  { id: 'BUS-02', nameKo: '2호차 메이플버스', nameEn: 'Route #22 Maple Bus' }
  ];
@@ -515,280 +457,6 @@
  { id: 'ETA_5M', radiusM: 1200, etaMins: 5, ko: '🚌 1.2km (도착 5분전)', en: '🚌 1.2km (~5m ETA)' },
  { id: 'ETA_10M', radiusM: 2500, etaMins: 10, ko: '🚌 2.5km (도착 10분전)', en: '🚌 2.5km (~10m ETA)' }
  ];
-
- // ========================================================================
- // 실시간 버스 위치 & 이동 궤적(Trail) 지도 컴포넌트 (Leaflet + OpenStreetMap)
- // ========================================================================
- function LiveBusRouteMap({ busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn, onRefresh }) {
- const mapContainerRef = useRef(null);
- const mapInstanceRef = useRef(null);
- const layerGroupRef = useRef(null);
-
- // 버스 이동 상태 판별: 도착 전 접근 중 vs 정체 지연 vs 정류장 통과 완료
- const routeStatus = useMemo(() => {
- if (!busLoc || typeof busLoc.lat !== 'number' || typeof busLoc.lng !== 'number') {
- return {
- kind: 'OFFLINE',
- badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
- icon: '📡',
- title: isEn ? 'Waiting for Bus GPS Signal' : '차량 단말기 GPS 대기 중',
- desc: isEn
- ? 'Live location appears automatically once the bus tablet starts its route.'
- : '버스 단말기에서 [실제 GPS 켜기]가 활성화되면 실시간 위치와 이동 경로가 표시됩니다.'
- };
- }
-
- const hasStop = typeof stopLat === 'number' && typeof stopLng === 'number';
- const curDist = hasStop ? calcDistanceMeters(busLoc.lat, busLoc.lng, stopLat, stopLng) : null;
- const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
-
- // 궤적 중 정류장 90m 이내를 이미 찍었고 현재는 멀어지고 있는지 확인
- let passedStop = false;
- let minTrailDist = curDist;
- if (hasStop && trail.length >= 2) {
- trail.forEach((pt) => {
- const d = calcDistanceMeters(pt.lat, pt.lng, stopLat, stopLng);
- if (d !== null && (minTrailDist === null || d < minTrailDist)) {
- minTrailDist = d;
- }
- });
- const prevPt = trail[trail.length - 2];
- const prevDist = calcDistanceMeters(prevPt.lat, prevPt.lng, stopLat, stopLng);
- if (minTrailDist !== null && minTrailDist <= 90 && curDist !== null && prevDist !== null && curDist > prevDist + 25 && curDist > 120) {
- passedStop = true;
- }
- }
-
- const speed = Number(busLoc.speedKmh) || 0;
- const ageSec = Math.max(0, Math.round((Date.now() - (Number(busLoc.updatedAt) || Date.now())) / 1000));
-
- if (passedStop) {
- return {
- kind: 'PASSED',
- badgeClass: 'bg-rose-50 text-rose-900 border-rose-300',
- icon: '🚨',
- title: isEn
- ? `Bus Already Passed [${stopLabel}] (${formatDistanceLabel(curDist, true)} away)`
- : `이미 [${stopLabel}] 정류장 부근을 지나갔습니다 (${formatDistanceLabel(curDist, false)} 멀어짐)`,
- desc: isEn
- ? `Trail shows the bus passed within ${minTrailDist}m of your stop and is moving away.`
- : `이동 궤적상 정류장 ${minTrailDist}m 이내를 통과한 뒤 다음 방향으로 이동 중입니다.`
- };
- }
-
- if (hasStop && curDist !== null && curDist <= 90) {
- return {
- kind: 'ARRIVED',
- badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-300',
- icon: '🚌✨',
- title: isEn
- ? `Bus is Right at [${stopLabel}] Now! (${curDist}m)`
- : `지금 바로 [${stopLabel}] 정류장에 도착했습니다! (${curDist}m)`,
- desc: isEn
- ? 'Your child can board or exit right now.'
- : '현재 정류장 바로 앞에 정차·진입 중입니다.'
- };
- }
-
- if (hasStop && curDist !== null) {
- const isDelayed = speed <= 4;
- const estMins = Math.max(1, Math.round(curDist / (speed > 8 ? (speed * 1000) / 60 : 350)));
- return {
- kind: 'APPROACHING',
- badgeClass: isDelayed
- ? 'bg-amber-50 text-amber-950 border-amber-300'
- : 'bg-sky-50 text-sky-950 border-sky-300',
- icon: isDelayed ? '⏳' : '🚌💨',
- title: isEn
- ? `${isDelayed ? 'Delayed in Traffic · ' : ''}Not Passed Yet — ${formatDistanceLabel(curDist, true)} Away (~${estMins}m)`
- : `${isDelayed ? '교통 정체 지연 · ' : ''}아직 지나가지 않았어요! (${formatDistanceLabel(curDist, false)} 전방 · 약 ${estMins}분 후 도착)`,
- desc: isEn
- ? `Speed: ${speed} km/h · Updated ${ageSec}s ago. Heading toward your stop.`
- : `현재 속도 ${speed}km/h · ${ageSec}초 전 수신. 정류장 방향으로 이동 중입니다.`
- };
- }
-
- return {
- kind: 'MOVING',
- badgeClass: 'bg-sky-50 text-sky-950 border-sky-300',
- icon: '🚌',
- title: isEn
- ? `${vehicleLabel} Live Location (${speed} km/h)`
- : `${vehicleLabel} 실시간 이동 중 (${speed} km/h)`,
- desc: isEn
- ? `Updated ${ageSec}s ago. Stop GPS pin not set yet.`
- : `${ageSec}초 전 위치 수신됨 (정류장 좌표 등록 시 남은 거리·통과 여부가 자동 표시됩니다).`
- };
- }, [busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn]);
-
- // Leaflet 지도 초기화 및 마커·이동 궤적(Polyline) 렌더링
- useEffect(() => {
- if (!mapContainerRef.current || !window.L) return;
-
- if (!mapInstanceRef.current) {
- const defaultLat = busLoc?.lat ?? stopLat ?? 37.2747;
- const defaultLng = busLoc?.lng ?? stopLng ?? 127.115;
- const map = window.L.map(mapContainerRef.current, {
- zoomControl: true,
- attributionControl: false
- }).setView([defaultLat, defaultLng], 15);
-
- window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
- maxZoom: 19
- }).addTo(map);
-
- layerGroupRef.current = window.L.layerGroup().addTo(map);
- mapInstanceRef.current = map;
- }
-
- const map = mapInstanceRef.current;
- const group = layerGroupRef.current;
- group.clearLayers();
-
- const boundsPoints = [];
-
- // 1. 정류장 핀(🏠) 표시
- if (typeof stopLat === 'number' && typeof stopLng === 'number') {
- const stopIcon = window.L.divIcon({
- className: '',
- html: `<div style="background:#4F46E5;color:#fff;font-weight:900;font-size:11px;padding:4px 8px;border-radius:999px;border:2px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,0.28);white-space:nowrap;">🚏 ${stopLabel}</div>`,
- iconSize: [120, 28],
- iconAnchor: [60, 14]
- });
- window.L.marker([stopLat, stopLng], { icon: stopIcon }).addTo(group);
- window.L.circle([stopLat, stopLng], {
- radius: 80,
- color: '#6366F1',
- fillColor: '#6366F1',
- fillOpacity: 0.12,
- weight: 1.5,
- dashArray: '4 4'
- }).addTo(group);
- boundsPoints.push([stopLat, stopLng]);
- }
-
- // 2. 버스 이동 궤적(Trail) + 현재 버스 마커(🚌)
- if (busLoc && typeof busLoc.lat === 'number' && typeof busLoc.lng === 'number') {
- const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
- const trailCoords = trail
- .filter((pt) => typeof pt.lat === 'number' && typeof pt.lng === 'number')
- .map((pt) => [pt.lat, pt.lng]);
-
- if (trailCoords.length >= 2) {
- window.L.polyline(trailCoords, {
- color: '#F59E0B',
- weight: 5,
- opacity: 0.85,
- dashArray: '8 6'
- }).addTo(group);
-
- // 출발/과거 지점 작은 점 표시
- trailCoords.slice(0, -1).forEach((pt, idx) => {
- if (idx % 2 === 0) {
- window.L.circleMarker(pt, {
- radius: 3.5,
- color: '#D97706',
- fillColor: '#FBBF24',
- fillOpacity: 0.9,
- weight: 1.5
- }).addTo(group);
- }
- });
- }
-
- // 버스와 정류장 사이 예상 직선 가이드
- if (typeof stopLat === 'number' && typeof stopLng === 'number') {
- window.L.polyline(
- [
- [busLoc.lat, busLoc.lng],
- [stopLat, stopLng]
- ],
- {
- color: '#10B981',
- weight: 2.5,
- opacity: 0.55,
- dashArray: '4 8'
- }
- ).addTo(group);
- }
-
- const busIcon = window.L.divIcon({
- className: '',
- html: `<div style="background:#111827;color:#FBBF24;font-weight:900;font-size:12px;padding:5px 10px;border-radius:999px;border:2.5px solid #FBBF24;box-shadow:0 4px 14px rgba(0,0,0,0.35);white-space:nowrap;">🚌 ${vehicleLabel}</div>`,
- iconSize: [125, 32],
- iconAnchor: [62, 16]
- });
- window.L.marker([busLoc.lat, busLoc.lng], { icon: busIcon }).addTo(group);
- boundsPoints.push([busLoc.lat, busLoc.lng]);
- }
-
- if (boundsPoints.length === 1) {
- map.setView(boundsPoints[0], 16);
- } else if (boundsPoints.length >= 2) {
- map.fitBounds(boundsPoints, { padding: [42, 42], maxZoom: 16 });
- }
-
- setTimeout(() => {
- try {
- map.invalidateSize();
- } catch (e) {}
- }, 120);
- }, [busLoc, stopLat, stopLng, stopLabel, vehicleLabel]);
-
- useEffect(() => {
- return () => {
- if (mapInstanceRef.current) {
- mapInstanceRef.current.remove();
- mapInstanceRef.current = null;
- }
- };
- }, []);
-
- return (
- <div className="bg-white rounded-3xl p-4 border-2 border-sky-200 shadow-xs space-y-3">
- <div className="flex items-center justify-between gap-2">
- <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
- <span>🗺️</span>
- <span>
- {isEn
- ? 'Live Bus Route & Stop Check'
- : '실시간 버스 위치 · 이동 경로 확인'}
- </span>
- </div>
- {onRefresh && (
- <button
- type="button"
- onClick={onRefresh}
- className="px-2.5 py-1 rounded-xl bg-sky-100 hover:bg-sky-200 text-sky-900 text-[11px] font-black"
- >
- {isEn ? '↻ Refresh GPS' : '↻ 위치 새로고침'}
- </button>
- )}
- </div>
-
- <div className={`p-3 rounded-2xl border text-left space-y-1 ${routeStatus.badgeClass}`}>
- <div className="text-xs font-black flex items-center gap-1.5">
- <span>{routeStatus.icon}</span>
- <span className="break-keep">{routeStatus.title}</span>
- </div>
- <p className="text-[11px] opacity-85 leading-snug break-keep">
- {routeStatus.desc}
- </p>
- </div>
-
- <div
- ref={mapContainerRef}
- className="w-full h-56 rounded-2xl overflow-hidden border border-slate-200 bg-slate-100"
- />
-
- <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 px-1">
- <span>🚌 {isEn ? 'Current Bus' : '현재 버스 위치'}</span>
- <span>┈ {isEn ? 'Recent Route Trail' : '지나온 이동 경로'}</span>
- <span>🚏 {isEn ? 'Child Stop' : '우리 아이 정류장'}</span>
- </div>
- </div>
- );
- }
 
  function App() {
  const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -883,7 +551,7 @@
  const seenLogIdsRef = useRef(new Set());
  const localSelfActionIdsRef = useRef(new Set());
 
- // 전체 학생 명단
+ // 전체 학생 명단 (클라우드 연결 시에는 DB가 최우선 진실의 원천!)
  const [students, setStudents] = useState(() => {
  try {
  const saved = localStorage.getItem('schooltap_students_v9');
@@ -892,11 +560,6 @@
  return [];
  }
  });
-
- // 차량별 실시간 위치 & 이동 궤적 맵 { 'BUS-01': { lat, lng, speedKmh, updatedAt, trail: [...] } }
- const [liveBusLocations, setLiveBusLocations] = useState({});
- const busTrailRef = useRef({});
- const lastBusDbPublishRef = useRef(0);
 
  // 학부모 폰에 연결된 내 아이 초대코드 상태
  const [parentLinkedCodes, setParentLinkedCodes] = useState(() => {
@@ -919,6 +582,7 @@
 
  const [inviteCodeInput, setInviteCodeInput] = useState('');
  const [linkingBusy, setLinkingBusy] = useState(false);
+ const [syncingBusy, setSyncingBusy] = useState(false);
  const [parentRelKey, setParentRelKey] = useState(() =>
  normalizeRelKey(localStorage.getItem('schooltap_parent_rel'))
  );
@@ -1000,7 +664,85 @@
  }, []);
 
  // 단말기 실물 NFC + 실시간 GPS Geofence 상태
- const [nfcScanning, setNfcScanning] = useState(false);
+       // 옵션 B: 서비스 워커(sw.js) 등록 및 푸시 구독(Web Push / FCM 토큰) 연동
+      const [pushSubJson, setPushSubJson] = useState(() => localStorage.getItem('schooltap_push_sub') || '');
+      const swRegRef = useRef(null);
+
+      useEffect(() => {
+        if (!('serviceWorker' in navigator)) return;
+        navigator.serviceWorker
+          .register('./sw.js', { scope: './' })
+          .then((reg) => {
+            swRegRef.current = reg;
+          })
+          .catch(() => {});
+      }, []);
+
+      const subscribeBackgroundPush = useCallback(async (vapidPublicKeyOpt = '') => {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+        try {
+          const reg = swRegRef.current || (await navigator.serviceWorker.ready);
+          swRegRef.current = reg;
+          let sub = await reg.pushManager.getSubscription();
+          const vapidKey = (vapidPublicKeyOpt || localStorage.getItem('schooltap_vapid_pub') || '').trim();
+          if (!sub && vapidKey) {
+            const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
+            const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+              outputArray[i] = rawData.charCodeAt(i);
+            }
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: outputArray
+            });
+          }
+          if (sub) {
+            const serialized = JSON.stringify(sub);
+            setPushSubJson(serialized);
+            localStorage.setItem('schooltap_push_sub', serialized);
+            return serialized;
+          }
+        } catch (e) {}
+        return null;
+      }, []);
+
+      const triggerBannerWithSw = useCallback(async ({ title, body, tag, url }) => {
+        try {
+          if ('vibrate' in navigator) {
+            try {
+              navigator.vibrate([220, 100, 220]);
+            } catch (e) {}
+          }
+          const svgBadge = encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#FBBF24"/><text x="64" y="88" font-size="76" text-anchor="middle">🚌</text></svg>'
+          );
+          const iconData = 'data:image/svg+xml;utf8,' + svgBadge;
+          const reg = swRegRef.current || (navigator.serviceWorker ? await navigator.serviceWorker.ready : null);
+          if (reg && typeof reg.showNotification === 'function' && Notification.permission === 'granted') {
+            await reg.showNotification(title, {
+              body,
+              tag: tag || 'schooltap-sw-' + Date.now(),
+              renotify: true,
+              icon: iconData,
+              badge: iconData,
+              data: { url: url || window.location.href }
+            });
+            return true;
+          }
+          return dispatchSystemBannerNotification({
+            title,
+            body,
+            tag,
+            onClickFocus: () => {}
+          });
+        } catch (e) {
+          return false;
+        }
+      }, []);
+
+      const [nfcScanning, setNfcScanning] = useState(false);
  const [wakeLockActive, setWakeLockActive] = useState(false);
  const [gpsTracking, setGpsTracking] = useState(false);
  const [busCoords, setBusCoords] = useState(null);
@@ -1041,7 +783,7 @@
 
  const showToast = useCallback((msg) => {
  setToast(msg);
- setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
+ setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3800);
  }, []);
 
  const formatTime = (ms) =>
@@ -1092,7 +834,8 @@
  const perm = await Notification.requestPermission();
  setNotifPermission(perm);
  if (perm === 'granted') {
- playChime('BOARD', soundMuted);
+            subscribeBackgroundPush();
+            playChime('BOARD', soundMuted);
  if (sendSample) {
  dispatchSystemBannerNotification({
  title: isEn
@@ -1146,7 +889,7 @@
  };
 
  // ======================================================================
- // Supabase 정규화 DB 헬퍼 함수 (단일 행 단위 CRUD + 실시간 버스 GPS 브로드캐스트)
+ // Supabase 정규화 DB 헬퍼 함수 (단일 행 단위 CRUD)
  // ======================================================================
  const syncSingleStudentToDb = useCallback(
  async (stuObj) => {
@@ -1230,82 +973,6 @@
  [schoolId, isEn]
  );
 
- // 단말기 실시간 GPS 위치 & 궤적 DB 저장 (schooltap_schools.bus_locations JSONB 활용)
- const publishBusLocationToDb = useCallback(
- async (routeId, coordsObj) => {
- const client = sbClientRef.current;
- if (!client || !coordsObj) return;
-
- const prevTrail = Array.isArray(busTrailRef.current[routeId])
- ? busTrailRef.current[routeId]
- : [];
- const lastPt = prevTrail[prevTrail.length - 1];
- const movedDist = lastPt
- ? calcDistanceMeters(lastPt.lat, lastPt.lng, coordsObj.lat, coordsObj.lng)
- : 999;
-
- const nextTrail =
- movedDist === null || movedDist >= 10
- ? [...prevTrail.slice(-24), { lat: coordsObj.lat, lng: coordsObj.lng, t: Date.now() }]
- : prevTrail;
- busTrailRef.current[routeId] = nextTrail;
-
- const locEntry = {
- lat: coordsObj.lat,
- lng: coordsObj.lng,
- accuracy: coordsObj.accuracy || 0,
- speedKmh: coordsObj.speedKmh || 0,
- direction: runDirection,
- updatedAt: Date.now(),
- trail: nextTrail
- };
-
- setLiveBusLocations((prev) => ({
- ...prev,
- [routeId]: locEntry
- }));
-
- try {
- const { data: schoolRow } = await client
- .from('schooltap_schools')
- .select('bus_locations')
- .eq('id', schoolId)
- .maybeSingle();
-
- const existingMap =
- schoolRow && schoolRow.bus_locations && typeof schoolRow.bus_locations === 'object'
- ? schoolRow.bus_locations
- : {};
-
- await client
- .from('schooltap_schools')
- .update({
- bus_locations: {
- ...existingMap,
- [routeId]: locEntry
- }
- })
- .eq('id', schoolId);
- } catch (e) {}
- },
- [schoolId, runDirection]
- );
-
- const refreshBusLocationsFromDb = useCallback(async () => {
- const client = sbClientRef.current;
- if (!client) return;
- try {
- const { data } = await client
- .from('schooltap_schools')
- .select('bus_locations')
- .eq('id', schoolId)
- .maybeSingle();
- if (data && data.bus_locations && typeof data.bus_locations === 'object') {
- setLiveBusLocations(data.bus_locations);
- }
- } catch (e) {}
- }, [schoolId]);
-
  const myLinkedIdsRef = useRef(new Set());
  useEffect(() => {
  myLinkedIdsRef.current = new Set(myLinkedChildren.map((c) => c.id));
@@ -1361,38 +1028,36 @@
  ) {
  setActiveStudentId(incomingLog.studentId);
  const allowPopup =
-              incomingLog.type === 'NO_ALIGHT_1H'
-                ? true
-                : incomingLog.type === 'APPROACHING_10M'
-                ? approachingEnabled
-                : tapBubbleEnabled;
-            if (allowPopup) {
-              if (incomingLog.type !== 'NO_ALIGHT_1H') {
-                playChime(incomingLog.type, soundMuted);
-              }
-              setPopupLog(incomingLog);
+ incomingLog.type === 'NO_ALIGHT_1H'
+ ? true
+ : incomingLog.type === 'APPROACHING_10M'
+ ? approachingEnabled
+ : tapBubbleEnabled;
+ if (allowPopup) {
+ playChime(incomingLog.type, soundMuted);
+ setPopupLog(incomingLog);
 
-              const targetKid = studentsRef.current.find((s) => s.id === incomingLog.studentId);
-              const kidDisplay = targetKid
-                ? sName(targetKid)
-                : incomingLog.studentName || (isEn ? 'Your child' : '우리 아이');
-              const q = resolveQuote(incomingLog);
-              const badgeTitle =
-                incomingLog.type === 'NO_ALIGHT_1H'
-                  ? isEn
-                    ? `🏷️ [${kidDisplay}] Exit Tap Missed — Please Check In`
-                    : `🏷️ [${kidDisplay}] 하차 태그를 잊은 것 같아요`
-                  : incomingLog.type === 'APPROACHING_10M'
-                  ? isEn
-                    ? `📍 [${kidDisplay}] Bus Arriving in ~${incomingLog.etaMinutes || 10}m`
-                    : `📍 [${kidDisplay}] 정류장 도착 약 ${incomingLog.etaMinutes || 10}분 전`
-                  : incomingLog.type === 'ALIGHT'
-                  ? isEn
-                    ? `🏫 [${kidDisplay}] Safe Drop-off Confirmed`
-                    : `🏫 [${kidDisplay}] 안전 하차 완료`
-                  : isEn
-                  ? `🚌 [${kidDisplay}] Boarding Confirmed`
-                  : `🚌 [${kidDisplay}] 버스 승차 완료`;
+ const targetKid = studentsRef.current.find((s) => s.id === incomingLog.studentId);
+ const kidDisplay = targetKid
+ ? sName(targetKid)
+ : incomingLog.studentName || (isEn ? 'Your child' : '우리 아이');
+ const q = resolveQuote(incomingLog);
+ const badgeTitle =
+ incomingLog.type === 'NO_ALIGHT_1H'
+ ? isEn
+ ? `🚨 [${kidDisplay}] No Drop-off Scan (1h Elapsed)`
+ : `🚨 [${kidDisplay}] 승차 후 1시간 하차 미태그 알림`
+ : incomingLog.type === 'APPROACHING_10M'
+ ? isEn
+ ? `📍 [${kidDisplay}] Bus Arriving in ~${incomingLog.etaMinutes || 10}m`
+ : `📍 [${kidDisplay}] 정류장 도착 약 ${incomingLog.etaMinutes || 10}분 전`
+ : incomingLog.type === 'ALIGHT'
+ ? isEn
+ ? `🏫 [${kidDisplay}] Safe Drop-off Confirmed`
+ : `🏫 [${kidDisplay}] 안전 하차 완료`
+ : isEn
+ ? `🚌 [${kidDisplay}] Boarding Confirmed`
+ : `🚌 [${kidDisplay}] 버스 승차 완료`;
 
  dispatchSystemBannerNotification({
  title: badgeTitle,
@@ -1415,7 +1080,7 @@
  ]
  );
 
- // DB에서 최신 학생 명단 가져오기
+ // DB에서 최신 학생 명단 전체 또는 특정 코드들을 즉시 가져와 state를 완벽히 덮어쓰는 핵심 동기화 함수
  const fetchFreshStudentsFromDb = useCallback(
  async (clientInstance, codesFilter = null) => {
  const client = clientInstance || sbClientRef.current;
@@ -1430,6 +1095,7 @@
  if (error) throw error;
  const mapped = (data || []).map(mapStudentFromDb);
  myLinkedIdsRef.current = new Set(mapped.map((m) => m.id));
+ // 삭제되었거나 수정된 상태를 그대로 반영하기 위해 해당 코드 기준 목록을 최신 DB 결과로 교체
  setStudents((prev) => {
  const otherCached = prev.filter(
  (p) => !upperCodes.includes((p.inviteCode || '').trim().toUpperCase())
@@ -1536,6 +1202,73 @@
  return true;
  };
 
+ // 학부모 화면 수동 강제 동기화 버튼 핸들러
+ const handleManualParentSync = async () => {
+ if (syncingBusy) return;
+ const client = sbClientRef.current;
+ if (!client) {
+ showToast(
+ isEn
+ ? '⚠️ Cloud API Key is missing. Tap status text at top to connect.'
+ : '⚠️ 클라우드 API 키가 연결되지 않았습니다. 상단 상태 문구를 눌러 키를 확인해 주세요.'
+ );
+ return;
+ }
+ if (parentLinkedCodes.length === 0) {
+ showToast(
+ isEn
+ ? '⚠️ No invite code linked yet.'
+ : '⚠️ 연결된 초대코드가 없습니다.'
+ );
+ return;
+ }
+
+ setSyncingBusy(true);
+ showToast(isEn ? '🔄 Syncing latest student info...' : '🔄 DB에서 최신 원생 정보와 알림을 불러오는 중...');
+
+ try {
+ const mapped = await fetchFreshStudentsFromDb(client, parentLinkedCodes);
+
+ if (!Array.isArray(mapped) || mapped.length === 0) {
+ showToast(
+ isEn
+ ? '⚠️ Student record not found in DB (may have been deleted by Admin).'
+ : '⚠️ DB에서 해당 초대코드 원생을 찾지 못했습니다 (관리자 화면에서 삭제되었거나 미저장 상태).'
+ );
+ setSyncingBusy(false);
+ return;
+ }
+
+ const kidIds = mapped.map((m) => m.id);
+ const { data: freshLogs } = await client
+ .from('schooltap_ride_logs')
+ .select('*')
+ .in('student_id', kidIds)
+ .order('tagged_at_ms', { ascending: false })
+ .limit(30);
+
+ if (Array.isArray(freshLogs)) {
+ freshLogs.forEach((r) => handleIncomingRideLog(r, true));
+ }
+
+ playChime('BOARD', soundMuted);
+ const activeKid = mapped.find((m) => m.id === activeStudentId) || mapped[0];
+ showToast(
+ isEn
+ ? `✅ Synced [${sName(activeKid)}] (${freshLogs?.length || 0} logs)!`
+ : `✅ [${sName(activeKid)}] 최신 정보 및 알림(${freshLogs?.length || 0}건) 동기화 완료!`
+ );
+ } catch (err) {
+ showToast(
+ isEn
+ ? `❌ Sync Error: ${err.message}`
+ : `❌ 동기화 오류: ${err.message}`
+ );
+ } finally {
+ setSyncingBusy(false);
+ }
+ };
+
  const handleDisconnectParent = async () => {
  setParentLinkedCodes([]);
  localStorage.removeItem('schooltap_parent_codes');
@@ -1556,7 +1289,7 @@
  };
 
  // ======================================================================
- // Supabase 초기 데이터 1회 로드 + 실시간 구독 (원생 + 승하차 로그 + 실시간 버스 GPS)
+ // Supabase 초기 데이터 1회 로드 + 선택적 Realtime 구독
  // ======================================================================
  const linkedCodesKey = useMemo(() => parentLinkedCodes.slice().sort().join(','), [parentLinkedCodes]);
 
@@ -1574,16 +1307,6 @@
 
  const bootstrapData = async () => {
  try {
- // 기관 실시간 차량 위치 함께 조회
- const { data: schoolData } = await client
- .from('schooltap_schools')
- .select('bus_locations')
- .eq('id', schoolId)
- .maybeSingle();
- if (active && schoolData?.bus_locations) {
- setLiveBusLocations(schoolData.bus_locations);
- }
-
  if (deviceRole === 'PARENT') {
  const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
  if (codes.length === 0) {
@@ -1674,21 +1397,6 @@
 
  const channel = client.channel(`schooltap-norm-${deviceRole}-${schoolId}-${Date.now()}`);
 
- // 차량 실시간 위치 변경 구독 (schooltap_schools.bus_locations)
- channel.on(
- 'postgres_changes',
- {
- event: 'UPDATE',
- schema: 'public',
- table: 'schooltap_schools',
- filter: `id=eq.${schoolId}`
- },
- (chg) => {
- if (!active || !chg?.new?.bus_locations) return;
- setLiveBusLocations(chg.new.bus_locations);
- }
- );
-
  if (deviceRole === 'PARENT') {
  const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
  if (codes.length > 0) {
@@ -1727,6 +1435,7 @@
  }
  );
  } else {
+ // 코드 입력 대기 화면에서도 관리자 변경사항(이름 수정/삭제) 즉시 반영
  channel.on(
  'postgres_changes',
  {
@@ -1822,7 +1531,7 @@
  stopKo: target.stopKo,
  stopEn: target.stopEn,
  tagTimeMs: nowMs,
- phraseIdx: Math.floor(Math.random() * 10)
+ phraseIdx: Math.floor(Math.random() * 2)
  };
  etaSentLockRef.current[target.id] = true;
  setLogs((prev) => [etaLog, ...prev]);
@@ -1858,80 +1567,81 @@
  ]
  );
 
- // 실시간 GPS 위치 추적 켜기/끄기 + 실시간 버스 위치 DB 송출
- // 승차 후 1시간(3,600,000ms) 미하차 시 부드러운 버블 팝업 & 상단 배너 안내 발송 (경고음 없음)
-      const noAlightSentLockRef = useRef({});
+ // 실시간 GPS 위치 추적 켜기/끄기
+ // 승차 후 1시간(3,600,000ms) 미하차 안전 경고 발송 함수 및 15초 주기 감시 루프
+ const noAlightSentLockRef = useRef({});
 
-      const sendNoAlightAlert = useCallback(
-        (stu, isTest = false) => {
-          const target = stu || currentStudent || students[0];
-          if (!target) return;
-          const nowMs = Date.now();
-          const boardSessionId = target.activeSession?.boardTimeMs || nowMs;
-          const lockKey = `${target.id}-${boardSessionId}`;
-          if (!isTest && noAlightSentLockRef.current[lockKey]) return;
+ const sendNoAlightAlert = useCallback(
+ (stu, isTest = false) => {
+ const target = stu || currentStudent || students[0];
+ if (!target) return;
+ const nowMs = Date.now();
+ const boardSessionId = target.activeSession?.boardTimeMs || nowMs;
+ const lockKey = `${target.id}-${boardSessionId}`;
+ if (!isTest && noAlightSentLockRef.current[lockKey]) return;
 
-          noAlightSentLockRef.current[lockKey] = true;
-          const alertLog = {
-            id: `noalight-${target.id}-${nowMs}`,
-            schoolId,
-            studentId: target.id,
-            studentName: target.nameKo,
-            vehicleId: target.activeSession?.vehicleId || currentBusObj.id,
-            vehicleNameKo: currentBusObj.nameKo,
-            vehicleNameEn: currentBusObj.nameEn,
-            type: 'NO_ALIGHT_1H',
-            stopKo: target.stopKo,
-            stopEn: target.stopEn,
-            tagTimeMs: nowMs,
-            phraseIdx: Math.floor(Math.random() * 10)
-          };
-          setLogs((prev) => [alertLog, ...prev]);
-          insertRideLogToDb(alertLog);
+ noAlightSentLockRef.current[lockKey] = true;
+ const alertLog = {
+ id: `noalight-${target.id}-${nowMs}`,
+ schoolId,
+ studentId: target.id,
+ studentName: target.nameKo,
+ vehicleId: target.activeSession?.vehicleId || currentBusObj.id,
+ vehicleNameKo: currentBusObj.nameKo,
+ vehicleNameEn: currentBusObj.nameEn,
+ type: 'NO_ALIGHT_1H',
+ stopKo: target.stopKo,
+ stopEn: target.stopEn,
+ tagTimeMs: nowMs,
+ phraseIdx: Math.floor(Math.random() * 2)
+ };
+ setLogs((prev) => [alertLog, ...prev]);
+ insertRideLogToDb(alertLog);
+ playChime('NO_ALIGHT_1H', soundMuted);
 
-          setReaderBanner({
-            type: 'NO_ALIGHT_1H',
-            student: target,
-            timeMs: nowMs
-          });
+ setReaderBanner({
+ type: 'NO_ALIGHT_1H',
+ student: target,
+ timeMs: nowMs
+ });
 
-          showToast(
-            isEn
-              ? `🏷️ Sent gentle 1h exit-tag reminder for ${sName(target)}.`
-              : `🏷️ [${sName(target)}] 학부모님께 하차 태그 확인 안내 버블을 보냈습니다.`
-          );
-        },
-        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, showToast]
-      );
+ showToast(
+ isEn
+ ? `🚨 [1h Safety Alert] Sent missing drop-off alert for ${sName(target)}!`
+ : `🚨 [1시간 미하차 안전알림] [${sName(target)}] 학부모님께 하차 미태그 알림 발송!`
+ );
+ },
+ [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, soundMuted, isEn, sName, showToast]
+ );
 
-      useEffect(() => {
-        const ONE_HOUR_MS = 60 * 60 * 1000; // 1시간 (3,600,000ms)
-        const checkOverdueBoarding = () => {
-          const now = Date.now();
-          students.forEach((stu) => {
-            if (!stu.activeSession || !stu.activeSession.boardTimeMs) return;
-            const elapsed = now - Number(stu.activeSession.boardTimeMs);
-            if (elapsed >= ONE_HOUR_MS) {
-              const lockKey = `${stu.id}-${stu.activeSession.boardTimeMs}`;
-              const alreadyLogged = logs.some(
-                (l) =>
-                  l.studentId === stu.id &&
-                  l.type === 'NO_ALIGHT_1H' &&
-                  l.tagTimeMs >= Number(stu.activeSession.boardTimeMs)
-              );
-              if (!noAlightSentLockRef.current[lockKey] && !alreadyLogged) {
-                sendNoAlightAlert(stu, false);
-              }
-            }
-          });
-        };
+ useEffect(() => {
+ const ONE_HOUR_MS = 60 * 60 * 1000; // 1시간 (3,600,000ms)
+ const checkOverdueBoarding = () => {
+ const now = Date.now();
+ students.forEach((stu) => {
+ if (!stu.activeSession || !stu.activeSession.boardTimeMs) return;
+ const elapsed = now - Number(stu.activeSession.boardTimeMs);
+ if (elapsed >= ONE_HOUR_MS) {
+ const lockKey = `${stu.id}-${stu.activeSession.boardTimeMs}`;
+ const alreadyLogged = logs.some(
+ (l) =>
+ l.studentId === stu.id &&
+ l.type === 'NO_ALIGHT_1H' &&
+ l.tagTimeMs >= Number(stu.activeSession.boardTimeMs)
+ );
+ if (!noAlightSentLockRef.current[lockKey] && !alreadyLogged) {
+ sendNoAlightAlert(stu, false);
+ }
+ }
+ });
+ };
 
-        checkOverdueBoarding();
-        const timer = setInterval(checkOverdueBoarding, 15000);
-        return () => clearInterval(timer);
-      }, [students, logs, sendNoAlightAlert]);
+ checkOverdueBoarding();
+ const timer = setInterval(checkOverdueBoarding, 15000);
+ return () => clearInterval(timer);
+ }, [students, logs, sendNoAlightAlert]);
 
-      const toggleGpsTracker = useCallback(() => {
+ const toggleGpsTracker = useCallback(() => {
  if (gpsTracking) {
  if (gpsWatchIdRef.current !== null && 'geolocation' in navigator) {
  navigator.geolocation.clearWatch(gpsWatchIdRef.current);
@@ -1950,21 +1660,14 @@
  const watchId = navigator.geolocation.watchPosition(
  (pos) => {
  const speedMs = pos.coords.speed;
- const nextCoords = {
+ setBusCoords({
  lat: pos.coords.latitude,
  lng: pos.coords.longitude,
  accuracy: Math.round(pos.coords.accuracy || 0),
  speedKmh: typeof speedMs === 'number' && speedMs >= 0 ? Math.round(speedMs * 3.6) : 0,
  updatedAt: Date.now()
- };
- setBusCoords(nextCoords);
+ });
  setGpsTracking(true);
-
- // 최소 5초 간격으로 부모 지도에 실시간 위치 및 이동 궤적 송출
- if (Date.now() - lastBusDbPublishRef.current >= 5000) {
- lastBusDbPublishRef.current = Date.now();
- publishBusLocationToDb(currentBusObj.id, nextCoords);
- }
  },
  () => {
  showToast(
@@ -1983,10 +1686,10 @@
  gpsWatchIdRef.current = watchId;
  showToast(
  isEn
- ? '🛰️ Live GPS Geofence & Route Map Active!'
- : '🛰️ 실시간 GPS 정류장 감시 및 부모님 지도 위치 송출 시작!'
+ ? '🛰️ Live GPS Geofence Active! Watching stop distances automatically.'
+ : '🛰️ 실시간 GPS 정류장 감시 시작! 반경 진입 시 자동으로 알림을 쏩니다.'
  );
- }, [gpsTracking, isEn, showToast, publishBusLocationToDb, currentBusObj.id]);
+ }, [gpsTracking, isEn, showToast]);
 
  useEffect(() => {
  return () => {
@@ -2056,15 +1759,13 @@
  (pos) => {
  const lat = pos.coords.latitude;
  const lng = pos.coords.longitude;
- const coordsObj = {
+ setBusCoords({
  lat,
  lng,
  accuracy: Math.round(pos.coords.accuracy || 0),
  speedKmh: 0,
  updatedAt: Date.now()
- };
- setBusCoords(coordsObj);
- publishBusLocationToDb(currentBusObj.id, coordsObj);
+ });
  saveCoords(lat, lng);
  },
  () => {
@@ -2163,29 +1864,29 @@
  }
 
  const nowMs = Date.now();
-          const DUPLICATE_COOLDOWN_MS = 180000; // 3분 (180,000ms) 중복 태그 방지
-          if (stu.lastTapMs && nowMs - stu.lastTapMs < DUPLICATE_COOLDOWN_MS) {
-            const remainSec = Math.ceil((DUPLICATE_COOLDOWN_MS - (nowMs - stu.lastTapMs)) / 1000);
-            const remainMin = Math.floor(remainSec / 60);
-            const remSecOnly = remainSec % 60;
-            const remainLabel = isEn
-              ? `${remainMin > 0 ? remainMin + 'm ' : ''}${remSecOnly}s`
-              : `${remainMin > 0 ? remainMin + '분 ' : ''}${remSecOnly}초`;
-            playChime('ERROR', soundMuted);
-            speakVoice(
-              isEn ? 'Already scanned within 3 minutes!' : '이미 태그되었습니다. 3분간 중복 방지됩니다.',
-              lang,
-              soundMuted
-            );
-            setReaderBanner({
-              type: 'DUPLICATE',
-              student: stu,
-              remain: remainSec,
-              remainLabel,
-              timeMs: nowMs
-            });
-            return;
-          }
+ const DUPLICATE_COOLDOWN_MS = 180000; // 3분 (180,000ms) 중복 태그 방지
+ if (stu.lastTapMs && nowMs - stu.lastTapMs < DUPLICATE_COOLDOWN_MS) {
+ const remainSec = Math.ceil((DUPLICATE_COOLDOWN_MS - (nowMs - stu.lastTapMs)) / 1000);
+ const remainMin = Math.floor(remainSec / 60);
+ const remSecOnly = remainSec % 60;
+ const remainLabel = isEn
+ ? `${remainMin > 0 ? remainMin + 'm ' : ''}${remSecOnly}s`
+ : `${remainMin > 0 ? remainMin + '분 ' : ''}${remSecOnly}초`;
+ playChime('ERROR', soundMuted);
+ speakVoice(
+ isEn ? 'Already scanned within 3 minutes!' : '이미 태그되었습니다. 3분간 중복 방지됩니다.',
+ lang,
+ soundMuted
+ );
+ setReaderBanner({
+ type: 'DUPLICATE',
+ student: stu,
+ remain: remainSec,
+ remainLabel,
+ timeMs: nowMs
+ });
+ return;
+ }
 
  const actionType = stu.activeSession ? 'ALIGHT' : 'BOARD';
  const phraseIdx = Math.floor(Math.random() * 4);
@@ -2433,10 +2134,31 @@
  </form>
 
  <div className="pt-3 border-t border-slate-100 space-y-2">
- <div className="text-[11px] font-bold text-slate-400">
+ <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
+ <span>
  {isEn
- ? '💡 Quick Demo: Tap a registered code below'
+ ? '💡 Quick Demo: Tap a registered code'
  : '💡 등록된 초대코드 바로 눌러서 연결해보기'}
+ </span>
+ <button
+ type="button"
+ onClick={async () => {
+ const client = sbClientRef.current;
+ if (!client) {
+ showToast(isEn ? '⚠️ API Key required' : '⚠️ API 키가 연결되지 않았습니다');
+ return;
+ }
+ const list = await fetchFreshStudentsFromDb(client, null);
+ showToast(
+ isEn
+ ? `🔄 Refreshed (${list?.length || 0} students)`
+ : `🔄 최신 명단(${list?.length || 0}명) 불러오기 완료`
+ );
+ }}
+ className="text-amber-700 underline font-black"
+ >
+ {isEn ? '🔄 Refresh List' : '🔄 명단 새로고침'}
+ </button>
  </div>
  <div className="grid grid-cols-2 gap-2">
  {students.slice(0, 6).map((s) => (
@@ -2470,11 +2192,6 @@
  const hasStopPin =
  typeof currentStudent.stopLat === 'number' &&
  typeof currentStudent.stopLng === 'number';
-
- const childRouteId = currentStudent.routeId || 'BUS-01';
- const childBusMeta = BUS_ROUTES.find((r) => r.id === childRouteId) || BUS_ROUTES[0];
- const childBusLabel = isEn ? childBusMeta.nameEn : childBusMeta.nameKo;
- const childBusLiveLoc = liveBusLocations[childRouteId] || null;
 
  return (
  <div className="space-y-4">
@@ -2546,7 +2263,6 @@
  </div>
  </div>
 
- {/* 내 자녀 연결 상태 헤더 카드 (불필요한 수동 동기화 버튼 제거, 실시간 자동 반영) */}
  <div className="bg-white rounded-3xl p-4 border-2 border-amber-300 shadow-xs space-y-3">
  <div className="flex items-center justify-between gap-2">
  <div className="flex items-center gap-2.5 min-w-0">
@@ -2559,7 +2275,7 @@
  <div className="min-w-0">
  <div className="flex items-center gap-1.5">
  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
- {isEn ? '✔ Live Auto-Sync' : '✔ 실시간 자동연동됨'}
+ {isEn ? '✔ Verified Parent Link' : '✔ 내 자녀 전용 연결됨'}
  </span>
  <span className="text-[10px] font-mono font-bold text-slate-400">
  #{currentStudent.inviteCode}
@@ -2573,14 +2289,34 @@
  </div>
  </div>
 
+ {(deviceRole === 'PARENT' || adminTab === 'PARENT_PREVIEW') && (
+ <div className="flex items-center gap-1 shrink-0">
+ <button
+ type="button"
+ disabled={syncingBusy}
+ onClick={handleManualParentSync}
+ className={`px-2 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 text-[11px] font-bold transition ${
+ syncingBusy ? 'opacity-60 animate-pulse' : ''
+ }`}
+ >
+ {syncingBusy
+ ? isEn
+ ? '⏳ Syncing'
+ : '⏳ 동기화중'
+ : isEn
+ ? '🔄 Sync'
+ : '🔄 동기화'}
+ </button>
  {deviceRole === 'PARENT' && (
  <button
  type="button"
  onClick={handleDisconnectParent}
- className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold shrink-0"
+ className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold"
  >
  {isEn ? 'Switch Code' : '코드 변경'}
  </button>
+ )}
+ </div>
  )}
  </div>
 
@@ -2612,43 +2348,21 @@
  <div className="inline-flex bg-slate-100 p-0.5 rounded-xl text-[11px] font-black shrink-0">
  <button
  onClick={() => setParentTab('BUBBLES')}
- className={`px-2 py-1 rounded-lg ${parentTab === 'BUBBLES' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}
+ className={`px-2.5 py-1 rounded-lg ${parentTab === 'BUBBLES' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}
  >
  {isEn ? '🚌 Bubbles' : '🚌 버블톡'}
  </button>
  <button
- onClick={() => {
- setParentTab('MAP');
- refreshBusLocationsFromDb();
- }}
- className={`px-2 py-1 rounded-lg ${parentTab === 'MAP' ? 'bg-sky-600 text-white' : 'text-slate-500'}`}
- >
- {isEn ? '🗺️ Bus Map' : '🗺️ 버스위치'}
- </button>
- <button
  onClick={() => setParentTab('CHECKLIST')}
- className={`px-2 py-1 rounded-lg ${parentTab === 'CHECKLIST' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
+ className={`px-2.5 py-1 rounded-lg ${parentTab === 'CHECKLIST' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
  >
- {isEn ? '✅ Tasks' : '✅ 알림장'}
+ {isEn ? '✅ Checklist' : '✅ 알림장'}
  </button>
  </div>
  </div>
  </div>
 
- {parentTab === 'MAP' ? (
- <LiveBusRouteMap
- busLoc={childBusLiveLoc}
- stopLat={currentStudent.stopLat}
- stopLng={currentStudent.stopLng}
- stopLabel={curStop}
- vehicleLabel={childBusLabel}
- isEn={isEn}
- onRefresh={async () => {
- await refreshBusLocationsFromDb();
- showToast(isEn ? '🛰️ Refreshed bus GPS!' : '🛰️ 최신 버스 위치를 확인했습니다!');
- }}
- />
- ) : parentTab === 'BUBBLES' ? (
+ {parentTab === 'BUBBLES' ? (
  <>
  <div
  className={`rounded-3xl p-5 shadow-md text-white bg-gradient-to-br ${
@@ -2673,23 +2387,11 @@
  ? `🏠 Waiting for ${curName}'s Next Tap`
  : `🏠 ${curName} 어린이 승하차 대기 중`}
  </div>
- <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-white/15">
- <span className="text-[11px] opacity-90 break-keep">
+ <p className="text-xs opacity-90 mt-2 leading-relaxed">
  {isEn
- ? 'Wondering if the bus passed or is delayed?'
- : '버스가 지나갔는지 늦어지는지 궁금할 땐?'}
- </span>
- <button
- type="button"
- onClick={() => {
- setParentTab('MAP');
- refreshBusLocationsFromDb();
- }}
- className="px-3 py-1.5 rounded-xl bg-white text-slate-900 text-[11px] font-black shadow-xs shrink-0"
- >
- {isEn ? '🗺️ Track Bus Route' : '🗺️ 실시간 위치·경로 보기'}
- </button>
- </div>
+ ? `Automatic GPS stop-approach alerts & instant NFC tap bubbles arrive privately for ${curName}.`
+ : `${curName} 어린이의 정류장에 버스가 가까워지거나 가방 키링을 찍으면 즉시 알림이 울립니다.`}
+ </p>
  </div>
 
  <div className="bg-white rounded-3xl p-4 border border-fuchsia-200 space-y-2.5">
@@ -2781,13 +2483,13 @@
  <div className="flex justify-between text-[11px] font-bold text-slate-500">
  <span>
  {l.type === 'NO_ALIGHT_1H'
-                                  ? isEn
-                                    ? '🏷️ Exit Tag Check-In (1h)'
-                                    : '🏷️ 하차 태그 확인 안내'
-                                  : l.type === 'BOARD'
-                                  ? isEn
-                                    ? '🚌 Boarding Confirmed'
-                                    : '🚌 승차 완료'
+ ? isEn
+ ? '🚨 1h Missing Drop-off Alert'
+ : '🚨 1시간 하차 미태그 안전확인'
+ : l.type === 'BOARD'
+ ? isEn
+ ? '🚌 Boarding Confirmed'
+ : '🚌 승차 완료'
  : l.type === 'ALIGHT'
  ? isEn
  ? '🏫 Safe Drop-off'
@@ -2937,11 +2639,11 @@
  <span>
  {gpsTracking
  ? isEn
- ? 'Live GPS Geofence & Map ON'
- : '실시간 GPS 정류장 · 지도 송출 중'
+ ? 'Live GPS Geofence ON'
+ : '실시간 GPS 정류장 감시 켜짐'
  : isEn
  ? 'GPS Geofence Standby'
- : 'GPS 정류장 · 지도 송출 대기'}
+ : 'GPS 정류장 자동감시 대기'}
  </span>
  </div>
  <button
@@ -3038,26 +2740,26 @@
  {readerBanner && !unregisteredUid && (
  <div
  className={`bubble-pop-in p-4 rounded-3xl font-black text-center ${
-                readerBanner.type === 'NO_ALIGHT_1H'
-                  ? 'bg-amber-500 text-slate-950'
-                  : readerBanner.type === 'ETA_SENT'
-                  ? 'bg-fuchsia-600 text-white'
-                  : readerBanner.type === 'BOARD'
-                  ? 'bg-emerald-500 text-white'
-                  : readerBanner.type === 'ALIGHT'
-                  ? 'bg-sky-500 text-white'
-                  : 'bg-indigo-500 text-white'
-              }`}
-            >
-              <div className="text-lg">
-                {readerBanner.type === 'NO_ALIGHT_1H'
-                  ? isEn
-                    ? `🏷️ Sent Exit-Tag Reminder for ${sName(readerBanner.student)}`
-                    : `🏷️ ${sName(readerBanner.student)} 하차 태그 확인 버블 발송`
-                  : readerBanner.type === 'ETA_SENT'
-                  ? isEn
-                    ? `📍 Auto Stop Alert Sent for ${sName(readerBanner.student)}!`
-                    : `📍 ${sName(readerBanner.student)} 정류장 접근 알림 자동 발송!`
+ readerBanner.type === 'NO_ALIGHT_1H'
+ ? 'bg-rose-600 text-white'
+ : readerBanner.type === 'ETA_SENT'
+ ? 'bg-fuchsia-600 text-white'
+ : readerBanner.type === 'BOARD'
+ ? 'bg-emerald-500 text-white'
+ : readerBanner.type === 'ALIGHT'
+ ? 'bg-sky-500 text-white'
+ : 'bg-indigo-500 text-white'
+ }`}
+ >
+ <div className="text-lg">
+ {readerBanner.type === 'NO_ALIGHT_1H'
+ ? isEn
+ ? `🚨 1h No Drop-off Alert Sent for ${sName(readerBanner.student)}!`
+ : `🚨 ${sName(readerBanner.student)} 승차 1시간 경과 미하차 알림 발송!`
+ : readerBanner.type === 'ETA_SENT'
+ ? isEn
+ ? `📍 Auto Stop Alert Sent for ${sName(readerBanner.student)}!`
+ : `📍 ${sName(readerBanner.student)} 정류장 접근 알림 자동 발송!`
  : readerBanner.type === 'BOARD'
  ? isEn
  ? `🚌 ${sName(readerBanner.student)} Boarding Confirmed!`
@@ -3071,8 +2773,8 @@
  ? `✅ Paired to ${sName(readerBanner.student)}! Tap Again!`
  : `✅ ${sName(readerBanner.student)} 키링 매칭 완료! 다시 찍어보세요!`
  : isEn
-                  ? `🙌 Already Scanned (${readerBanner.remainLabel || readerBanner.remain + 's'} left · 3m cooldown)`
-                  : `🙌 이미 찍혔어요 (${readerBanner.remainLabel || readerBanner.remain + '초'} 남음 · 3분 중복방지)`}
+ ? `🙌 Already Scanned (${readerBanner.remainLabel || readerBanner.remain + 's'} left · 3m cooldown)`
+ : `🙌 이미 찍혔어요 (${readerBanner.remainLabel || readerBanner.remain + '초'} 남음 · 3분 중복방지)`}
  </div>
  <div className="text-xs opacity-90 font-mono mt-0.5">
  {formatTime(readerBanner.timeMs)}
@@ -3196,23 +2898,23 @@
  </div>
 
  <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        onClick={() => sendApproachingAlert(s, approachingMins, false, distM)}
-                        className="py-1.5 px-1 rounded-xl bg-fuchsia-600/40 hover:bg-fuchsia-600/60 text-fuchsia-200 text-[10px] font-bold"
-                      >
-                        {isEn
-                          ? `📍 ${approachingMins}m ETA Test`
-                          : `📍 ${approachingMins}분전 알림`}
-                      </button>
-                      <button
-                        onClick={() => sendNoAlightAlert(s, true)}
-                        className="py-1.5 px-1 rounded-xl bg-amber-500/30 hover:bg-amber-500/50 text-amber-200 text-[10px] font-bold"
-                      >
-                        {isEn
-                          ? '🏷️ 1h Tag Check'
-                          : '🏷️ 1시간 미태그 테스트'}
-                      </button>
-                    </div>
+ <button
+ onClick={() => sendApproachingAlert(s, approachingMins, false, distM)}
+ className="py-1.5 px-1 rounded-xl bg-fuchsia-600/40 hover:bg-fuchsia-600/60 text-fuchsia-200 text-[10px] font-bold"
+ >
+ {isEn
+ ? `📍 ${approachingMins}m ETA Test`
+ : `📍 ${approachingMins}분전 알림`}
+ </button>
+ <button
+ onClick={() => sendNoAlightAlert(s, true)}
+ className="py-1.5 px-1 rounded-xl bg-rose-600/40 hover:bg-rose-600/60 text-rose-200 text-[10px] font-bold"
+ >
+ {isEn
+ ? '🚨 1h No-Exit Test'
+ : '🚨 1시간 미하차 테스트'}
+ </button>
+ </div>
  </div>
  );
  })}
@@ -3468,21 +3170,21 @@
  >
  <div
  className={`p-6 text-center text-white bg-gradient-to-br ${
-                    popupLog.type === 'NO_ALIGHT_1H'
-                      ? 'from-amber-400 via-orange-400 to-amber-500'
-                      : popupLog.type === 'APPROACHING_10M'
-                      ? 'from-fuchsia-500 to-rose-500'
-                      : popupLog.type === 'ALIGHT'
-                      ? 'from-sky-400 to-indigo-500'
-                      : 'from-emerald-400 to-teal-500'
-                  }`}
-                >
-                  <div className="inline-block px-3 py-1 rounded-full bg-white/95 text-slate-900 text-xs font-black mb-2">
-                    {popupLog.type === 'NO_ALIGHT_1H'
-                      ? isEn
-                        ? '🏷️ Friendly Exit-Tag Reminder (1h)'
-                        : '🏷️ 하차 태그 확인 안내 (1시간 경과)'
-                      : popupLog.type === 'APPROACHING_10M'
+ popupLog.type === 'NO_ALIGHT_1H'
+ ? 'from-rose-600 to-red-700'
+ : popupLog.type === 'APPROACHING_10M'
+ ? 'from-fuchsia-500 to-rose-500'
+ : popupLog.type === 'ALIGHT'
+ ? 'from-sky-400 to-indigo-500'
+ : 'from-emerald-400 to-teal-500'
+ }`}
+ >
+ <div className="inline-block px-3 py-1 rounded-full bg-white/95 text-slate-900 text-xs font-black mb-2">
+ {popupLog.type === 'NO_ALIGHT_1H'
+ ? isEn
+ ? '🚨 1h Elapsed — No Drop-off Scan!'
+ : '🚨 승차 후 1시간 하차 미태그 경고!'
+ : popupLog.type === 'APPROACHING_10M'
  ? isEn
  ? `📍 Arriving in ~${popupLog.etaMinutes || 10} Mins!${popupLog.autoGps ? ' (GPS)' : ''}`
  : `📍 정류장 도착 약 ${popupLog.etaMinutes || 10}분 전!${popupLog.autoGps ? ' (GPS)' : ''}`
@@ -3510,26 +3212,12 @@
  “{resolveQuote(popupLog).title}”
  </h3>
  <p className="text-xs text-slate-500 break-keep">{resolveQuote(popupLog).sub}</p>
- <div className="grid grid-cols-2 gap-2">
  <button
- type="button"
- onClick={() => {
- setPopupLog(null);
- setParentTab('MAP');
- refreshBusLocationsFromDb();
- }}
- className="py-3 rounded-2xl bg-sky-600 text-white font-black text-xs"
- >
- {isEn ? '🗺️ View Map' : '🗺️ 버스 위치 보기'}
- </button>
- <button
- type="button"
  onClick={() => setPopupLog(null)}
- className="py-3 rounded-2xl bg-slate-900 text-white font-black text-xs"
+ className="w-full py-3 rounded-2xl bg-slate-900 text-white font-black text-xs"
  >
  {isEn ? 'Got It! 💛' : '확인했어요! 💛'}
  </button>
- </div>
  </div>
  </div>
  </div>
