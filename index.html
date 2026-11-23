@@ -410,13 +410,9 @@
  }, [lang, isEn]);
 
  const sName = useCallback(
-        (stu) => {
-          if (!stu) return '';
-          if (isEn) return stu.nameEn || stu.nameKo || '';
-          return stu.nameKo || stu.nameEn || '';
-        },
-        [isEn]
-      );
+ (stu) => (!stu ? '' : isEn ? stu.nameEn || stu.nameKo : stu.nameKo || stu.nameEn),
+ [isEn]
+ );
  const sStop = useCallback(
  (stu) =>
  !stu
@@ -689,35 +685,25 @@
  const client = sbClientRef.current;
 
  if (client) {
-          setLinkingBusy(true);
-          try {
-            const { data, error } = await client
-              .from('schooltap_students')
-              .select('*')
-              .eq('invite_code', clean)
-              .maybeSingle();
-            if (!error && data) {
-              matched = mapStudentFromDb(data);
-              myLinkedIdsRef.current.add(matched.id);
-              setStudents((prev) => {
-                const exists = prev.some((item) => item.id === matched.id);
-                return exists
-                  ? prev.map((item) => (item.id === matched.id ? matched : item))
-                  : [...prev, matched];
-              });
-              const { data: kidLogs } = await client
-                .from('schooltap_ride_logs')
-                .select('*')
-                .eq('student_id', matched.id)
-                .order('tagged_at_ms', { ascending: false })
-                .limit(30);
-              if (Array.isArray(kidLogs)) {
-                kidLogs.forEach((r) => handleIncomingRideLog(r, true));
-              }
-            }
-          } catch (e) {}
-          setLinkingBusy(false);
-        }
+ setLinkingBusy(true);
+ try {
+ const { data, error } = await client
+ .from('schooltap_students')
+ .select('*')
+ .eq('invite_code', clean)
+ .maybeSingle();
+ if (!error && data) {
+ matched = mapStudentFromDb(data);
+ setStudents((prev) => {
+ const exists = prev.some((item) => item.id === matched.id);
+ return exists
+ ? prev.map((item) => (item.id === matched.id ? matched : item))
+ : [...prev, matched];
+ });
+ }
+ } catch (e) {}
+ setLinkingBusy(false);
+ }
 
  if (!matched) {
  playChime('ERROR', soundMuted);
@@ -738,8 +724,7 @@
  setParentRelKey(finalRelKey);
  localStorage.setItem('schooltap_parent_rel', finalRelKey);
 
- myLinkedIdsRef.current.add(matched.id);
-        setActiveStudentId(matched.id);
+ setActiveStudentId(matched.id);
  setInviteCodeInput('');
  setAddSiblingModalOpen(false);
  playChime('BOARD', soundMuted);
@@ -868,9 +853,8 @@
 
  setCloudStatus('CONNECTED');
  const mappedKids = (stuRows || []).map(mapStudentFromDb);
-              if (mappedKids.length > 0) {
-                myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
-                setStudents(mappedKids);
+ if (mappedKids.length > 0) {
+ setStudents(mappedKids);
  const kidIds = mappedKids.map((k) => k.id);
  const { data: logRows } = await client
  .from('schooltap_ride_logs')
