@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -8,8 +8,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="SchoolTap" />
-  <title>SchoolTap™ | 통학 안심 버블 알림</title>
-  <!-- 동적 PWA Manifest 주입 -->
+  <title>SchoolTap™ | Smart Bus Bubble Alerts</title>
+  <!-- Dynamic PWA Manifest Injection (Home Screen App Install) -->
   <script>
     (function () {
       try {
@@ -17,7 +17,7 @@
           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="44" fill="#FBBF24"/><text x="96" y="128" font-size="108" text-anchor="middle">🚌</text></svg>'
         );
         const manifest = {
-          name: 'SchoolTap™ 통학 안심 버블 알림',
+          name: 'SchoolTap™ Smart Bus Bubble Alerts',
           short_name: 'SchoolTap',
           start_url: window.location.href,
           display: 'standalone',
@@ -91,11 +91,11 @@
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-    // 기본 Supabase 프로젝트 URL 및 기관 ID
+    // Default Supabase Project URL & School ID
     const DEFAULT_SUPABASE_URL = 'https://vhwdxgpnubmieytjuaaw.supabase.co';
     const DEFAULT_SCHOOL_ID = 'SCH-001';
 
-    // 보호자 호칭 다국어 매핑
+    // Guardian relation options (real-time EN <-> KO translation)
     const RELATION_OPTIONS = [
       { key: 'MOM', ko: '엄마', en: 'Mom' },
       { key: 'DAD', ko: '아빠', en: 'Dad' },
@@ -113,10 +113,10 @@
 
     const getRelLabel = (relKey, lang) => {
       const found = RELATION_OPTIONS.find((r) => r.key === normalizeRelKey(relKey)) || RELATION_OPTIONS[0];
-      return lang === 'en' ? found.en : found.ko;
+      return lang === 'ko' ? found.ko : found.en;
     };
 
-    // DB 행(snake_case) <-> 앱 상태(camelCase) 양방향 매퍼
+    // DB snake_case <-> App camelCase mappers
     const mapStudentFromDb = (row) => ({
       id: row.id,
       schoolId: row.school_id || DEFAULT_SCHOOL_ID,
@@ -198,7 +198,7 @@
       tagged_at_ms: Number(log.tagTimeMs) || Date.now()
     });
 
-    // 안드로이드 / 브라우저 시스템 상단 배너 푸시 알림 발송 헬퍼
+    // System status-bar banner notification helper
     const dispatchSystemBannerNotification = ({ title, body, tag, onClickFocus }) => {
       try {
         if (!('Notification' in window)) return false;
@@ -236,7 +236,7 @@
       }
     };
 
-    // 지구 곡률 기반 두 GPS 좌표 사이 실제 거리(m) 계산 (Haversine 공식)
+    // Haversine distance calculation (meters)
     const calcDistanceMeters = (lat1, lng1, lat2, lng2) => {
       if (
         typeof lat1 !== 'number' ||
@@ -270,7 +270,7 @@
       return `${meters} m`;
     };
 
-    // 클립보드 안전 복사 헬퍼
+    // Safe clipboard copy helper
     const safeCopyText = (text) => {
       try {
         const ta = document.createElement('textarea');
@@ -288,7 +288,7 @@
       }
     };
 
-    // 효과음 및 음성 안내 합성기
+    // Web Audio Chime & Speech Synthesis
     const playChime = (type = 'BOARD', muted = false) => {
       if (muted) return;
       try {
@@ -332,20 +332,20 @@
       } catch (e) {}
     };
 
-    const speakVoice = (text, lang = 'ko', muted = false) => {
+    const speakVoice = (text, lang = 'en', muted = false) => {
       if (muted) return;
       try {
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
           const utter = new SpeechSynthesisUtterance(text);
-          utter.lang = lang === 'en' ? 'en-US' : 'ko-KR';
+          utter.lang = lang === 'ko' ? 'ko-KR' : 'en-US';
           utter.rate = 1.05;
           window.speechSynthesis.speak(utter);
         }
       } catch (e) {}
     };
 
-    // 한·영 10종 랜덤 감성 버블 멘트 풀 (승차 / 하차 / 도착 예정 / 1시간 하차 미태그 안내)
+    // Bilingual 10-phrase cheerful bubble pools (EN & KO)
     const QUOTES = {
       BOARD: {
         ko: [
@@ -458,6 +458,7 @@
       { id: 'BUS-02', nameKo: '2호차 메이플버스', nameEn: 'Route #22 Maple Bus' }
     ];
 
+    // US & KR friendly default demo roster (displays Emma & Leo first in English!)
     const INITIAL_STUDENTS = [
       {
         id: 'stu-1',
@@ -472,7 +473,7 @@
         stopLat: null,
         stopLng: null,
         uid: '04:A1:22:9B',
-        inviteCode: 'SOYI-1004',
+        inviteCode: 'EMMA-1004',
         keyringHex: '#F472B6',
         avatarEmoji: '👧🏻',
         activeSession: null,
@@ -491,7 +492,7 @@
         stopLat: null,
         stopLng: null,
         uid: '04:B7:88:1C',
-        inviteCode: 'TAEHA-7788',
+        inviteCode: 'LEO-7788',
         keyringHex: '#60A5FA',
         avatarEmoji: '👦🏻',
         activeSession: null,
@@ -517,14 +518,13 @@
     ];
 
     // ========================================================================
-    // 실시간 버스 위치 & 이동 궤적(Trail) 지도 컴포넌트 (Leaflet + OpenStreetMap)
+    // Live Bus Position & Route Trail Map Component (Leaflet + OpenStreetMap)
     // ========================================================================
     function LiveBusRouteMap({ busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn, onRefresh }) {
       const mapContainerRef = useRef(null);
       const mapInstanceRef = useRef(null);
       const layerGroupRef = useRef(null);
 
-      // 버스 이동 상태 판별: 도착 전 접근 중 vs 정체 지연 vs 정류장 통과 완료
       const routeStatus = useMemo(() => {
         if (!busLoc || typeof busLoc.lat !== 'number' || typeof busLoc.lng !== 'number') {
           return {
@@ -533,7 +533,7 @@
             icon: '📡',
             title: isEn ? 'Waiting for Bus GPS Signal' : '차량 단말기 GPS 대기 중',
             desc: isEn
-              ? 'Live location appears automatically once the bus tablet starts its route.'
+              ? 'Live location appears automatically once the bus reader turns ON GPS.'
               : '버스 단말기에서 [실제 GPS 켜기]가 활성화되면 실시간 위치와 이동 경로가 표시됩니다.'
           };
         }
@@ -542,7 +542,6 @@
         const curDist = hasStop ? calcDistanceMeters(busLoc.lat, busLoc.lng, stopLat, stopLng) : null;
         const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
 
-        // 궤적 중 정류장 90m 이내를 이미 찍었고 현재는 멀어지고 있는지 확인
         let passedStop = false;
         let minTrailDist = curDist;
         if (hasStop && trail.length >= 2) {
@@ -621,7 +620,6 @@
         };
       }, [busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn]);
 
-      // Leaflet 지도 초기화 및 마커·이동 궤적(Polyline) 렌더링
       useEffect(() => {
         if (!mapContainerRef.current || !window.L) return;
 
@@ -647,7 +645,6 @@
 
         const boundsPoints = [];
 
-        // 1. 정류장 핀(🚏) 표시
         if (typeof stopLat === 'number' && typeof stopLng === 'number') {
           const stopIcon = window.L.divIcon({
             className: '',
@@ -667,7 +664,6 @@
           boundsPoints.push([stopLat, stopLng]);
         }
 
-        // 2. 버스 이동 궤적(Trail) + 현재 버스 마커(🚌)
         if (busLoc && typeof busLoc.lat === 'number' && typeof busLoc.lng === 'number') {
           const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
           const trailCoords = trail
@@ -791,7 +787,7 @@
     function App() {
       const params = useMemo(() => new URLSearchParams(window.location.search), []);
 
-      // 기기 권한(Role): PARENT | READER | ADMIN
+      // Device Role: PARENT | READER | ADMIN
       const [deviceRole, setDeviceRole] = useState(() => {
         const r = (params.get('role') || params.get('mode') || '').toUpperCase();
         if (r === 'PARENT') return 'PARENT';
@@ -808,19 +804,21 @@
         return localStorage.getItem('schooltap_school_id') || DEFAULT_SCHOOL_ID;
       }, [params]);
 
+      // Default language is English ('en'), with 1-tap toggle to Korean ('ko')
       const [lang, setLang] = useState(() => {
         const pLang = params.get('lang');
-        if (pLang === 'en' || pLang === 'ko') {
-          localStorage.setItem('schooltap_lang', pLang);
+        if (pLang === 'ko' || pLang === 'en') {
+          localStorage.setItem('schooltap_lang_v2', pLang);
           return pLang;
         }
-        return localStorage.getItem('schooltap_lang') === 'en' ? 'en' : 'ko';
+        const saved = localStorage.getItem('schooltap_lang_v2');
+        return saved === 'ko' ? 'ko' : 'en';
       });
 
       const isEn = lang === 'en';
 
       useEffect(() => {
-        localStorage.setItem('schooltap_lang', lang);
+        localStorage.setItem('schooltap_lang_v2', lang);
         document.documentElement.lang = lang;
         document.title = isEn
           ? 'SchoolTap™ | Smart Bus Bubble Alerts'
@@ -851,7 +849,12 @@
         [isEn]
       );
 
-      const [adminTab, setAdminTab] = useState('OFFICE');
+      // Default tab on load: PARENT_PREVIEW so US school evaluators immediately see the interactive demo
+      const [adminTab, setAdminTab] = useState(() => {
+        const t = (params.get('tab') || '').toUpperCase();
+        if (t === 'OFFICE' || t === 'READER' || t === 'PARENT_PREVIEW') return t;
+        return 'PARENT_PREVIEW';
+      });
       const [selectedBusRouteId, setSelectedBusRouteId] = useState('BUS-01');
       const [runDirection, setRunDirection] = useState('DROPOFF');
 
@@ -861,7 +864,7 @@
       );
       const vehicleName = isEn ? currentBusObj.nameEn : currentBusObj.nameKo;
 
-      // Supabase 클라우드 연결 정보
+      // Supabase cloud connection info
       const [sbUrl, setSbUrl] = useState(() => {
         const u = params.get('sbUrl');
         if (u) localStorage.setItem('schooltap_sb_url', u);
@@ -881,22 +884,26 @@
       const seenLogIdsRef = useRef(new Set());
       const localSelfActionIdsRef = useRef(new Set());
 
-      // 전체 학생 명단
+      // Student roster (seeds with INITIAL_STUDENTS if empty so offline/GitHub demo works out of the box)
       const [students, setStudents] = useState(() => {
         try {
           const saved = localStorage.getItem('schooltap_students_v9');
-          return saved ? JSON.parse(saved) : [];
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+          return INITIAL_STUDENTS;
         } catch (e) {
-          return [];
+          return INITIAL_STUDENTS;
         }
       });
 
-      // 차량별 실시간 위치 & 이동 궤적 맵 { 'BUS-01': { lat, lng, speedKmh, updatedAt, trail: [...] } }
+      // Live bus locations & route trails
       const [liveBusLocations, setLiveBusLocations] = useState({});
       const busTrailRef = useRef({});
       const lastBusDbPublishRef = useRef(0);
 
-      // 학부모 폰에 연결된 내 아이 초대코드 상태
+      // Linked child invite codes on Parent phone
       const [parentLinkedCodes, setParentLinkedCodes] = useState(() => {
         const urlInvite = (params.get('invite') || '').trim().toUpperCase();
         try {
@@ -959,13 +966,12 @@
       const [checklists, setChecklists] = useState(INITIAL_CHECKLISTS);
       const [noticeInput, setNoticeInput] = useState('');
 
-      // 맞춤 알림 옵션 + 오늘 하루 알림 끄기 + 시스템 상단 배너 푸시 권한 상태
+      // Alert preferences + Mute Today + Push permission
       const [approachingEnabled, setApproachingEnabled] = useState(true);
       const [approachingMins, setApproachingMins] = useState(10);
       const [tapBubbleEnabled, setTapBubbleEnabled] = useState(true);
       const [soundMuted, setSoundMuted] = useState(false);
 
-      // 오늘 하루 알림 끄기 (KST YYYY-MM-DD 기준)
       const getTodayKstDateStr = () => {
         const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
         return kst.toISOString().slice(0, 10);
@@ -1007,7 +1013,6 @@
         };
       }, []);
 
-      // VAPID 공개키 + 푸시 구독 저장 + Edge Function 호출
       const [vapidPubKey, setVapidPubKey] = useState(() => localStorage.getItem('schooltap_vapid_pub') || '');
       const [pushSubJson, setPushSubJson] = useState(() => localStorage.getItem('schooltap_push_sub') || '');
       const [pushSyncStatus, setPushSyncStatus] = useState('');
@@ -1021,6 +1026,12 @@
             swRegRef.current = reg;
           })
           .catch(() => {});
+      }, []);
+
+      const [toast, setToast] = useState('');
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
       }, []);
 
       const savePushSubscriptionToCloud = useCallback(
@@ -1046,15 +1057,15 @@
               .from('schooltap_push_subscriptions')
               .upsert(rows, { onConflict: 'id' });
             if (!error) {
-              setPushSyncStatus('🟢 푸시 구독 DB 저장됨');
+              setPushSyncStatus(isEn ? '🟢 Push DB Saved' : '🟢 푸시 구독 DB 저장됨');
               return true;
             }
           } catch (e) {}
 
-          setPushSyncStatus('🟡 로컬 구독 완료');
+          setPushSyncStatus(isEn ? '🟡 Local Subscribed' : '🟡 로컬 구독 완료');
           return false;
         },
-        [parentLinkedCodes, schoolId, isPausedToday]
+        [parentLinkedCodes, schoolId, isPausedToday, isEn]
       );
 
       const subscribeBackgroundPush = useCallback(
@@ -1144,15 +1155,14 @@
       const [unregisteredUid, setUnregisteredUid] = useState('');
       const [readerBanner, setReaderBanner] = useState(null);
       const [popupLog, setPopupLog] = useState(null);
-      const [toast, setToast] = useState('');
 
-      // 원장님 화면 신규 학생 등록 폼
+      // Admin roster registration form
       const [newStuName, setNewStuName] = useState('');
       const [newStuStop, setNewStuStop] = useState('');
       const [newStuUid, setNewStuUid] = useState('');
       const [capturingUidForOffice, setCapturingUidForOffice] = useState(false);
 
-      // 원생 정보 수정 모달 상태
+      // Admin edit modal
       const [editingStudent, setEditingStudent] = useState(null);
       const [editName, setEditName] = useState('');
       const [editStop, setEditStop] = useState('');
@@ -1165,11 +1175,6 @@
           localStorage.setItem('schooltap_students_v9', JSON.stringify(students));
         } catch (e) {}
       }, [students]);
-
-      const showToast = useCallback((msg) => {
-        setToast(msg);
-        setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
-      }, []);
 
       const togglePauseToday = async () => {
         const todayStr = getTodayKstDateStr();
@@ -1197,8 +1202,8 @@
               ? '🔕 Paused all alerts for today. Resumes automatically tomorrow!'
               : '🔕 오늘 하루 알림이 꺼졌습니다. 내일 자동으로 다시 켜집니다!'
             : isEn
-              ? '🔔 Alerts resumed!'
-              : '🔔 오늘 알림이 다시 켜졌습니다!'
+            ? '🔔 Alerts resumed!'
+            : '🔔 오늘 알림이 다시 켜졌습니다!'
         );
       };
 
@@ -1211,7 +1216,7 @@
 
       const resolveQuote = useCallback(
         (log) => {
-          const list = (QUOTES[log.type] || QUOTES.BOARD)[lang] || QUOTES.BOARD.ko;
+          const list = (QUOTES[log.type] || QUOTES.BOARD)[lang] || QUOTES.BOARD.en;
           const item = list[(log.phraseIdx || 0) % list.length];
           const stopStr = isEn ? log.stopEn || 'Oak Creek Stop' : log.stopKo || '집 앞 정류장';
           const etaStr = String(log.etaMinutes || 10);
@@ -1236,7 +1241,6 @@
         [lang, isEn, vehicleName]
       );
 
-      // 시스템 배너 알림 권한 요청 및 즉시 테스트 함수
       const requestSystemNotificationPermission = async (sendSample = false) => {
         if (!('Notification' in window)) {
           showToast(
@@ -1305,17 +1309,12 @@
       };
 
       // ======================================================================
-      // Supabase 정규화 DB 헬퍼 함수 (단일 행 단위 CRUD + 실시간 버스 GPS 브로드캐스트)
+      // Supabase CRUD & Live Bus GPS Helpers
       // ======================================================================
       const syncSingleStudentToDb = useCallback(
         async (stuObj) => {
           const client = sbClientRef.current;
           if (!client || !stuObj) {
-            showToast(
-              isEn
-                ? '⚠️ Saved locally only — enter Supabase API Key first!'
-                : '⚠️ 클라우드 API 키가 없어 현재 기기에만 저장되었습니다!'
-            );
             return false;
           }
           try {
@@ -1327,16 +1326,15 @@
               setLastTxDebug(isEn ? '🟢 DB Synced' : '🟢 DB 저장 OK');
               return true;
             } else {
-              setLastTxDebug(`🔴 DB오류: ${error.message}`);
-              showToast(`🔴 DB 저장 실패: ${error.message}`);
+              setLastTxDebug(`🔴 DB Err: ${error.message}`);
               return false;
             }
           } catch (err) {
-            setLastTxDebug(`🔴 통신오류: ${err.message}`);
+            setLastTxDebug(`🔴 Net Err: ${err.message}`);
             return false;
           }
         },
-        [schoolId, isEn, showToast]
+        [schoolId, isEn]
       );
 
       const deleteStudentFromDb = useCallback(
@@ -1352,22 +1350,21 @@
               setLastTxDebug(isEn ? '🟢 Deleted in DB' : '🟢 DB 삭제 OK');
               return true;
             } else {
-              setLastTxDebug(`🔴 삭제실패: ${error.message}`);
-              showToast(`🔴 DB 삭제 실패: ${error.message}`);
+              setLastTxDebug(`🔴 Del Err: ${error.message}`);
               return false;
             }
           } catch (err) {
             return false;
           }
         },
-        [isEn, showToast]
+        [isEn]
       );
 
       const insertRideLogToDb = useCallback(
         async (logObj) => {
           const client = sbClientRef.current;
           if (!client || !logObj) {
-            setLastTxDebug(isEn ? '⚠️ No API Key' : '⚠️ API 키 미입력');
+            setLastTxDebug(isEn ? '🟡 Local Demo Mode' : '🟡 로컬 데모 모드');
             return;
           }
           localSelfActionIdsRef.current.add(logObj.id);
@@ -1381,20 +1378,19 @@
               setLastTxDebug(isEn ? '🟢 Alert Sent OK' : '🟢 실시간 전송 OK');
               invokePushEdgeFunction(logObj);
             } else {
-              setLastTxDebug(`🔴 로그전송실패: ${error.message}`);
+              setLastTxDebug(`🔴 Log Err: ${error.message}`);
             }
           } catch (err) {
-            setLastTxDebug(`🔴 네트워크 오류: ${err.message}`);
+            setLastTxDebug(`🔴 Net Err: ${err.message}`);
           }
         },
         [schoolId, isEn, invokePushEdgeFunction]
       );
 
-      // 단말기 실시간 GPS 위치 & 궤적 DB 저장 (schooltap_schools.bus_locations JSONB 활용)
       const publishBusLocationToDb = useCallback(
         async (routeId, coordsObj) => {
           const client = sbClientRef.current;
-          if (!client || !coordsObj) return;
+          if (!coordsObj) return;
 
           const prevTrail = Array.isArray(busTrailRef.current[routeId])
             ? busTrailRef.current[routeId]
@@ -1424,6 +1420,8 @@
             ...prev,
             [routeId]: locEntry
           }));
+
+          if (!client) return;
 
           try {
             const { data: schoolRow } = await client
@@ -1476,7 +1474,6 @@
         studentsRef.current = students;
       }, [students]);
 
-      // 실시간 수신 로그 처리 핸들러 (앱 내 버블 + 백그라운드 시스템 상단 배너 동시 발송)
       const handleIncomingRideLog = useCallback(
         (rawRow, isHistory = false) => {
           if (!rawRow || !rawRow.id) return;
@@ -1577,7 +1574,6 @@
         ]
       );
 
-      // DB에서 최신 학생 명단 가져오기
       const fetchFreshStudentsFromDb = useCallback(
         async (clientInstance, codesFilter = null) => {
           const client = clientInstance || sbClientRef.current;
@@ -1607,21 +1603,20 @@
               .order('id', { ascending: true });
             if (error) throw error;
             const mapped = (data || []).map(mapStudentFromDb);
-            setStudents(mapped);
+            if (mapped.length > 0) setStudents(mapped);
             return mapped;
           }
         },
         [schoolId]
       );
 
-      // 학부모 초대코드 검증 및 연결
       const handleConnectChildByCode = async (rawCode, relKeyArg) => {
         const clean = (rawCode || '').trim().toUpperCase();
         if (!clean) {
           showToast(
             isEn
-              ? 'Please enter an invite code! (e.g., SOYI-1004)'
-              : '초대코드를 입력해 주세요! (예: SOYI-1004)'
+              ? 'Please enter an invite code! (e.g., EMMA-1004)'
+              : '초대코드를 입력해 주세요! (예: EMMA-1004)'
           );
           return false;
         }
@@ -1656,7 +1651,9 @@
             }
           } catch (e) {}
           setLinkingBusy(false);
-        } else {
+        }
+
+        if (!matched) {
           matched =
             students.find((s) => (s.inviteCode || '').trim().toUpperCase() === clean) || null;
         }
@@ -1665,8 +1662,8 @@
           playChime('ERROR', soundMuted);
           showToast(
             isEn
-              ? '❌ Invalid or deleted invite code. Please check with your school!'
-              : '❌ 존재하지 않거나 삭제된 초대코드입니다. 학원에서 받은 코드를 다시 확인해 주세요!'
+              ? '❌ Invalid invite code. Try EMMA-1004 or LEO-7788!'
+              : '❌ 존재하지 않는 초대코드입니다. (예: EMMA-1004)'
           );
           return false;
         }
@@ -1713,12 +1710,12 @@
         showToast(
           isEn
             ? 'Unlinked. Enter a new invite code to connect another student.'
-            : '연결이 해제되었습니다. 최신 명단을 불러왔습니다.'
+            : '연결이 해제되었습니다. 새 초대코드를 입력해 주세요.'
         );
       };
 
       // ======================================================================
-      // Supabase 초기 데이터 1회 로드 + 실시간 구독 (원생 + 승하차 로그 + 실시간 버스 GPS)
+      // Supabase Realtime Bootstrap
       // ======================================================================
       const linkedCodesKey = useMemo(() => parentLinkedCodes.slice().sort().join(','), [parentLinkedCodes]);
 
@@ -1736,7 +1733,6 @@
 
         const bootstrapData = async () => {
           try {
-            // 기관 실시간 차량 위치 함께 조회
             const { data: schoolData } = await client
               .from('schooltap_schools')
               .select('bus_locations')
@@ -1760,7 +1756,9 @@
                   setCloudStatus('ERROR');
                 } else {
                   setCloudStatus('CONNECTED');
-                  setStudents((previewRows || []).map(mapStudentFromDb));
+                  if (Array.isArray(previewRows) && previewRows.length > 0) {
+                    setStudents(previewRows.map(mapStudentFromDb));
+                  }
                 }
                 return;
               }
@@ -1778,10 +1776,10 @@
 
               setCloudStatus('CONNECTED');
               const mappedKids = (stuRows || []).map(mapStudentFromDb);
-              myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
-              setStudents(mappedKids);
-
               if (mappedKids.length > 0) {
+                myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
+                setStudents(mappedKids);
+
                 const kidIds = mappedKids.map((k) => k.id);
                 const { data: logRows } = await client
                   .from('schooltap_ride_logs')
@@ -1836,7 +1834,6 @@
 
         const channel = client.channel(`schooltap-norm-${deviceRole}-${schoolId}-${Date.now()}`);
 
-        // 차량 실시간 위치 변경 구독 (schooltap_schools.bus_locations)
         channel.on(
           'postgres_changes',
           {
@@ -1962,9 +1959,9 @@
         };
       }, [sbUrl, sbKey, deviceRole, schoolId, linkedCodesKey, handleIncomingRideLog]);
 
-      // 도착 예정 알림 발송 공통 함수
+      // Approaching ETA Alert Helper
       const sendApproachingAlert = useCallback(
-        (stu, customEtaMins, autoTriggered = false, distMeters = null) => {
+        (stu, customEtaMins, autoTriggered = false, distMeters = null, triggerPopup = false) => {
           const target = stu || currentStudent || students[0];
           if (!target) return;
           const nowMs = Date.now();
@@ -1973,7 +1970,7 @@
             id: `eta-${target.id}-${nowMs}`,
             schoolId,
             studentId: target.id,
-            studentName: target.nameKo,
+            studentName: isEn ? target.nameEn : target.nameKo,
             vehicleId: currentBusObj.id,
             vehicleNameKo: currentBusObj.nameKo,
             vehicleNameEn: currentBusObj.nameEn,
@@ -1999,9 +1996,13 @@
             timeMs: nowMs
           });
 
+          if (triggerPopup && !isPausedToday) {
+            setPopupLog(etaLog);
+          }
+
           showToast(
             isEn
-              ? `📍 ${autoTriggered ? '[Auto GPS] ' : ''}Sent ~${etaVal}m ETA alert to ${sName(target)}'s parent!`
+              ? `📍 ${autoTriggered ? '[Auto GPS] ' : ''}Sent ~${etaVal}m ETA alert for ${sName(target)}!`
               : `📍 ${autoTriggered ? '[GPS 반경진입 자동] ' : ''}[${sName(target)}] 학부모님께 도착 ${etaVal}분 전 알림 발송!`
           );
         },
@@ -2016,15 +2017,16 @@
           soundMuted,
           isEn,
           sName,
+          isPausedToday,
           showToast
         ]
       );
 
-      // 승차 후 1시간(3,600,000ms) 미하차 시 부드러운 버블 팝업 & 상단 배너 안내 발송
+      // 1-Hour No-Alight Reminder Helper
       const noAlightSentLockRef = useRef({});
 
       const sendNoAlightAlert = useCallback(
-        (stu, isTest = false) => {
+        (stu, isTest = false, triggerPopup = false) => {
           const target = stu || currentStudent || students[0];
           if (!target) return;
           const nowMs = Date.now();
@@ -2037,7 +2039,7 @@
             id: `noalight-${target.id}-${nowMs}`,
             schoolId,
             studentId: target.id,
-            studentName: target.nameKo,
+            studentName: isEn ? target.nameEn : target.nameKo,
             vehicleId: target.activeSession?.vehicleId || currentBusObj.id,
             vehicleNameKo: currentBusObj.nameKo,
             vehicleNameEn: currentBusObj.nameEn,
@@ -2056,13 +2058,17 @@
             timeMs: nowMs
           });
 
+          if (triggerPopup && !isPausedToday) {
+            setPopupLog(alertLog);
+          }
+
           showToast(
             isEn
               ? `🏷️ Sent gentle 1h exit-tag reminder for ${sName(target)}.`
               : `🏷️ [${sName(target)}] 학부모님께 하차 태그 확인 안내 버블을 보냈습니다.`
           );
         },
-        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, showToast]
+        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, isPausedToday, showToast]
       );
 
       useEffect(() => {
@@ -2081,7 +2087,7 @@
                   l.tagTimeMs >= Number(stu.activeSession.boardTimeMs)
               );
               if (!noAlightSentLockRef.current[lockKey] && !alreadyLogged) {
-                sendNoAlightAlert(stu, false);
+                sendNoAlightAlert(stu, false, false);
               }
             }
           });
@@ -2121,7 +2127,6 @@
             setBusCoords(nextCoords);
             setGpsTracking(true);
 
-            // 최소 5초 간격으로 부모 지도에 실시간 위치 및 이동 궤적 송출
             if (Date.now() - lastBusDbPublishRef.current >= 5000) {
               lastBusDbPublishRef.current = Date.now();
               publishBusLocationToDb(currentBusObj.id, nextCoords);
@@ -2157,7 +2162,6 @@
         };
       }, []);
 
-      // 실시간 GPS 반경 진입 판별 (Geofence 엔진)
       useEffect(() => {
         if (!gpsTracking || !busCoords) return;
 
@@ -2180,12 +2184,11 @@
           );
 
           if (distM !== null && distM <= activePreset.radiusM) {
-            sendApproachingAlert(stu, activePreset.etaMins, true, distM);
+            sendApproachingAlert(stu, activePreset.etaMins, true, distM, false);
           }
         });
       }, [busCoords, gpsTracking, students, runDirection, currentBusObj, activePreset, sendApproachingAlert]);
 
-      // 현위치 정류장 좌표 수동 지정
       const pinCurrentGpsToStudent = (stuId) => {
         const saveCoords = (lat, lng) => {
           let updatedTarget = null;
@@ -2240,13 +2243,12 @@
         }
       };
 
-      // 갤럭시 실물 NFC 단독 개통
       const startGalaxyNfcScanner = async () => {
         if (!('NDEFReader' in window)) {
           showToast(
             isEn
-              ? '⚠️ Tap [Open in Chrome App] below — Samsung Internet blocks Web NFC!'
-              : '⚠️ 현재 삼성 인터넷으로 열렸습니다! 아래 [🚀 Chrome 앱으로 즉시 열기] 버튼을 눌러주세요.'
+              ? '⚠️ Web NFC works on Android Chrome. Use the simulation buttons below on desktop/iOS!'
+              : '⚠️ 실물 NFC 스캐너는 안드로이드 Chrome에서 작동합니다. PC/아이폰에서는 아래 시뮬레이션 버튼을 눌러주세요!'
           );
           return;
         }
@@ -2279,10 +2281,10 @@
         }
       };
 
-      // NFC 태그 인식 엔진
+      // NFC Tag Engine (bypassCooldown=true when triggered from interactive demo buttons)
       const handleTagUidRef = useRef(null);
       const handleTagUid = useCallback(
-        (rawUid) => {
+        (rawUid, bypassCooldown = false, showImmediateBubble = false) => {
           const cleanUid = (rawUid || '').trim().toUpperCase();
           if (!cleanUid) return;
 
@@ -2325,7 +2327,7 @@
 
           const nowMs = Date.now();
           const DUPLICATE_COOLDOWN_MS = 180000;
-          if (stu.lastTapMs && nowMs - stu.lastTapMs < DUPLICATE_COOLDOWN_MS) {
+          if (!bypassCooldown && stu.lastTapMs && nowMs - stu.lastTapMs < DUPLICATE_COOLDOWN_MS) {
             const remainSec = Math.ceil((DUPLICATE_COOLDOWN_MS - (nowMs - stu.lastTapMs)) / 1000);
             const remainMin = Math.floor(remainSec / 60);
             const remSecOnly = remainSec % 60;
@@ -2383,7 +2385,7 @@
             id: `tap-${stu.id}-${nowMs}`,
             schoolId,
             studentId: stu.id,
-            studentName: stu.nameKo,
+            studentName: isEn ? stu.nameEn : stu.nameKo,
             vehicleId: currentBusObj.id,
             vehicleNameKo: currentBusObj.nameKo,
             vehicleNameEn: currentBusObj.nameEn,
@@ -2406,6 +2408,10 @@
             lang,
             soundMuted
           );
+
+          if (showImmediateBubble && !isPausedToday && tapBubbleEnabled) {
+            setPopupLog(newLog);
+          }
 
           if (shouldAutoPin) {
             showToast(
@@ -2436,6 +2442,8 @@
           syncSingleStudentToDb,
           insertRideLogToDb,
           sName,
+          isPausedToday,
+          tapBubbleEnabled,
           showToast
         ]
       );
@@ -2444,7 +2452,6 @@
         handleTagUidRef.current = handleTagUid;
       }, [handleTagUid]);
 
-      // 미등록 스티커 원터치 매칭 함수
       const bindStickerToStudent = async (targetStuId) => {
         if (!unregisteredUid) return;
         const boundUid = unregisteredUid;
@@ -2486,7 +2493,6 @@
         });
       };
 
-      // QR 생성용 베이스 URL 계산
       const isGoogleSandbox =
         window.location.hostname.includes('usercontent.goog') ||
         window.location.hostname.includes('google') ||
@@ -2513,7 +2519,7 @@
       );
 
       // ======================================================================
-      // 서브 뷰 A: 학부모님 전용 화면
+      // Sub-View A: Parent App View (with Interactive Demo Simulator Bar!)
       // ======================================================================
       const renderDedicatedParentView = () => {
         if (myLinkedChildren.length === 0) {
@@ -2573,8 +2579,8 @@
                     onChange={(e) => setInviteCodeInput(e.target.value)}
                     placeholder={
                       isEn
-                        ? 'Enter Invite Code (e.g., SOYI-1004)'
-                        : '초대코드 입력 (예: SOYI-1004)'
+                        ? 'Enter Invite Code (e.g., EMMA-1004)'
+                        : '초대코드 입력 (예: EMMA-1004)'
                     }
                     className="w-full px-4 py-3.5 rounded-2xl border-2 border-amber-300 bg-amber-50/40 text-center font-mono text-base font-black uppercase tracking-wider focus:outline-none focus:border-amber-500"
                   />
@@ -2596,7 +2602,7 @@
                 <div className="pt-3 border-t border-slate-100 space-y-2">
                   <div className="text-[11px] font-bold text-slate-400">
                     {isEn
-                      ? '💡 Quick Demo: Tap a registered code below'
+                      ? '💡 Quick Demo: Tap a sample student pass below'
                       : '💡 등록된 초대코드 바로 눌러서 연결해보기'}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -2640,7 +2646,57 @@
 
         return (
           <div className="space-y-4">
-            {/* 백그라운드 시스템 배너 알림 & 홈 화면 앱 설치 카드 */}
+            {/* Instant Interactive Demo Simulator Strip (1-Click Test for Evaluators!) */}
+            <div className="bg-slate-900 text-white rounded-3xl p-4 shadow-md border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black text-amber-400 flex items-center gap-1.5">
+                  <span>✨</span>
+                  <span>
+                    {isEn
+                      ? `Instant Live Demo — Test ${curName}'s Bus Alerts`
+                      : `✨ 원클릭 라이브 체험 — ${curName} 어린이 알림 바로 눌러보기`}
+                  </span>
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-bold text-slate-300">
+                  {isEn ? 'Interactive Prototype' : '시제품 체험'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleTagUid(currentStudent.uid, true, true)}
+                  className={`py-2.5 px-2 rounded-2xl text-xs font-black transition active:scale-95 ${
+                    currentStudent.activeSession
+                      ? 'bg-sky-500 hover:bg-sky-400 text-white'
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                  }`}
+                >
+                  {currentStudent.activeSession
+                    ? isEn
+                      ? '🏫 Tap Drop-off'
+                      : '🏫 하차 태그 체험'
+                    : isEn
+                    ? '🚌 Tap Boarding'
+                    : '🚌 승차 태그 체험'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendApproachingAlert(currentStudent, approachingMins, false, 950, true)}
+                  className="py-2.5 px-2 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-black transition active:scale-95"
+                >
+                  {isEn ? `📍 ${approachingMins}m ETA Bubble` : `📍 ${approachingMins}분전 도착버블`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendNoAlightAlert(currentStudent, true, true)}
+                  className="py-2.5 px-2 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition active:scale-95"
+                >
+                  {isEn ? '🏷️ 1h Tag Check' : '🏷️ 1시간 미태그 안내'}
+                </button>
+              </div>
+            </div>
+
+            {/* System Top-Bar Notification & PWA App Install Card */}
             <div className="bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 rounded-3xl p-4 border-2 border-amber-300 space-y-2.5 shadow-xs">
               <div className="flex items-start justify-between gap-2">
                 <div className="space-y-0.5">
@@ -2652,8 +2708,8 @@
                           ? 'Background Top-Bar Alerts Active'
                           : '상단 배너 시스템 알림 활성화됨'
                         : isEn
-                        ? 'Enable Top-Bar Alerts When App Is Minimized'
-                        : '다른 앱 사용 중에도 상단 배너 알림 받기'}
+                        ? 'Install as App & Enable Phone Banner Alerts'
+                        : '홈 화면 앱 설치 및 상단 배너 알림 켜기'}
                     </span>
                   </div>
                   <p className="text-[11px] text-amber-900 leading-snug break-keep">
@@ -2662,7 +2718,7 @@
                         ? 'Alerts will appear in your phone status bar even while using other apps.'
                         : '브라우저를 내려두거나 다른 앱을 보셔도 휴대폰 상단 상태바에 배너와 진동이 울립니다.'
                       : isEn
-                      ? 'Tap below to allow phone status-bar banners & add SchoolTap to your Home Screen.'
+                      ? 'Add SchoolTap to your Home Screen like a native app & allow status-bar bubble alerts.'
                       : '아래 버튼을 눌러 시스템 알림을 허용하고 홈 화면에 추가하면 앱처럼 배너 알림을 받을 수 있어요.'}
                   </p>
                 </div>
@@ -2698,7 +2754,7 @@
                     onClick={triggerPwaInstall}
                     className="py-2 px-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-black transition"
                   >
-                    {isEn ? '📲 Install App Icon' : '📲 홈 화면 앱 설치'}
+                    {isEn ? '📲 Add to Home Screen' : '📲 홈 화면 앱 설치'}
                   </button>
                 ) : (
                   <div className="py-2 px-2.5 rounded-xl bg-emerald-100 text-emerald-900 text-[11px] font-black text-center">
@@ -2708,7 +2764,7 @@
               </div>
             </div>
 
-            {/* 내 자녀 연결 상태 헤더 카드 */}
+            {/* Child Connection Header Card */}
             <div className="bg-white rounded-3xl p-4 border-2 border-amber-300 shadow-xs space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -2908,8 +2964,8 @@
                             ? 'Paused until midnight · Resumes tomorrow'
                             : '오늘 자정까지 푸시 중지됨 · 내일 자동 복구'
                           : isEn
-                            ? 'Pause push alerts for today only'
-                            : '브라우저 차단 없이 오늘만 푸시 알림을 잠시 끕니다'}
+                          ? 'Pause push alerts for today only'
+                          : '브라우저 차단 없이 오늘만 푸시 알림을 잠시 끕니다'}
                       </div>
                     </div>
                     <button
@@ -2926,8 +2982,8 @@
                           ? 'Resume Now'
                           : '다시 켜기'
                         : isEn
-                          ? 'Mute Today'
-                          : '오늘 끄기'}
+                        ? 'Mute Today'
+                        : '오늘 끄기'}
                     </button>
                   </div>
                 </div>
@@ -2955,27 +3011,19 @@
                             : `전체보기 (${myLogs.length})`}
                         </button>
                       )}
-                      {cloudStatus !== 'CONNECTED' && (
-                        <button
-                          onClick={() => setCloudModalOpen(true)}
-                          className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 text-[10px] font-black"
-                        >
-                          {isEn ? '⚠️ Fix Cloud Key' : '⚠️ API 키 연결하기'}
-                        </button>
-                      )}
                     </div>
                   </div>
                   {myLogs.length === 0 ? (
-                    <div className="py-8 text-center text-xs text-slate-400 font-bold leading-relaxed">
+                    <div className="py-6 text-center text-xs text-slate-400 font-bold leading-relaxed">
                       {isEn ? (
                         <>
                           No scans recorded yet today!<br />
-                          Tap <strong>{curName}’s backpack charm</strong> on the Bus Reader phone 🏷️
+                          Tap <strong>"🚌 Tap Boarding"</strong> in the dark bar above to see a live bubble!
                         </>
                       ) : (
                         <>
                           아직 오늘 찍힌 기록이 없어요!<br />
-                          버스 단말기(갤럭시 1번)에 <strong>{curName} 키링</strong>을 찍어보세요 🏷️
+                          위 검은색 바의 <strong>[🚌 승차 태그 체험]</strong> 버튼을 눌러 버블을 확인해 보세요!
                         </>
                       )}
                     </div>
@@ -3087,7 +3135,7 @@
       };
 
       // ======================================================================
-      // 서브 뷰 B: 버스 부착 전용 단말기
+      // Sub-View B: Bus Reader Kiosk View
       // ======================================================================
       const renderBusReaderView = () => (
         <div className="bg-slate-900 text-white rounded-[2.2rem] p-6 shadow-xl space-y-5">
@@ -3298,24 +3346,6 @@
           )}
 
           <div className="py-2 flex flex-col items-center text-center">
-            {!('NDEFReader' in window) && (
-              <div className="mb-4 p-3.5 rounded-2xl bg-rose-500/20 border border-rose-400/60 text-left space-y-2 max-w-sm">
-                <div className="text-xs font-black text-rose-200">
-                  {isEn
-                    ? '⚠️ Opened in Samsung Internet (Web NFC disabled by Samsung)'
-                    : '⚠️ 현재 삼성 인터넷으로 열려 실물 NFC가 차단되어 있습니다'}
-                </div>
-                <a
-                  href={`intent://${window.location.host}${window.location.pathname}${window.location.search}#Intent;scheme=https;package=com.android.chrome;end`}
-                  className="block w-full py-2.5 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs text-center shadow-md"
-                >
-                  {isEn
-                    ? '🚀 Tap Here to Open in Chrome App Automatically'
-                    : '🚀 여기를 눌러 Chrome 앱으로 즉시 점프하기'}
-                </a>
-              </div>
-            )}
-
             <button
               type="button"
               onClick={startGalaxyNfcScanner}
@@ -3388,7 +3418,7 @@
 
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
-                        onClick={() => handleTagUid(s.uid)}
+                        onClick={() => handleTagUid(s.uid, true, false)}
                         className="py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-[11px] font-black"
                       >
                         {s.activeSession
@@ -3409,7 +3439,7 @@
 
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
-                        onClick={() => sendApproachingAlert(s, approachingMins, false, distM)}
+                        onClick={() => sendApproachingAlert(s, approachingMins, false, distM, false)}
                         className="py-1.5 px-1 rounded-xl bg-fuchsia-600/40 hover:bg-fuchsia-600/60 text-fuchsia-200 text-[10px] font-bold"
                       >
                         {isEn
@@ -3417,7 +3447,7 @@
                           : `📍 ${approachingMins}분전 알림`}
                       </button>
                       <button
-                        onClick={() => sendNoAlightAlert(s, true)}
+                        onClick={() => sendNoAlightAlert(s, true, false)}
                         className="py-1.5 px-1 rounded-xl bg-amber-500/30 hover:bg-amber-500/50 text-amber-200 text-[10px] font-bold"
                       >
                         {isEn
@@ -3434,7 +3464,7 @@
       );
 
       // ======================================================================
-      // 서브 뷰 C: 원장님·사업주 관리 화면
+      // Sub-View C: School Admin Console View
       // ======================================================================
       const renderAdminOfficeView = () => (
         <div className="space-y-4">
@@ -3443,12 +3473,12 @@
               <div className="text-xs font-black text-amber-950">
                 {isEn
                   ? '☁️ Role-Separated QR Codes (Phone #1 Bus Reader · Phone #2 Parent App)'
-                  : '☁️ 갤럭시 1번(단말기) · 2번(학부모 전용) QR 나누어 찍기'}
+                  : '☁️ 버스 단말기 · 학부모 전용 QR 배포 센터'}
               </div>
               <p className="text-[11px] text-amber-900 mt-0.5">
                 {isEn
-                  ? 'Parent phones never see admin menus and automatically receive GPS ETA + NFC bubbles!'
-                  : '학부모용 QR로 접속한 폰에는 관리자 메뉴가 숨겨지고, 실시간 GPS 접근 알림과 NFC 버블만 울립니다!'}
+                  ? 'Parent phones hide admin menus and receive private GPS ETA + NFC bubbles!'
+                  : '학부모용 QR로 접속한 폰에는 관리자 메뉴가 숨겨지고, 내 아이의 알림만 울립니다!'}
               </p>
             </div>
             <button
@@ -3518,8 +3548,8 @@
                     const ownerNames = duplicateOwners.map((o) => sName(o)).join(', ');
                     const ok = window.confirm(
                       isEn
-                        ? `NFC UID (${finalUid}) is already assigned to [${ownerNames}]. Transfer it to [${cleanName}] and unassign from [${ownerNames}]?`
-                        : `입력하신 NFC 고유번호(${finalUid})는 이미 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전하고 기존 등록은 미배정 처리할까요?`
+                        ? `NFC UID (${finalUid}) is already assigned to [${ownerNames}]. Transfer it to [${cleanName}]?`
+                        : `입력하신 NFC 고유번호(${finalUid})는 이미 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전할까요?`
                     );
                     if (!ok) return;
                   }
@@ -3836,33 +3866,6 @@
                       </button>
                     </div>
                   </div>
-
-                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5">
-                    <div className="text-[11px] font-bold text-slate-700">
-                      {typeof editingStudent.stopLat === 'number'
-                        ? isEn
-                          ? `🛰️ Saved GPS: ${editingStudent.stopLat.toFixed(4)}, ${editingStudent.stopLng.toFixed(4)}`
-                          : `🛰️ 현재 저장된 정류장 좌표: ${editingStudent.stopLat.toFixed(4)}, ${editingStudent.stopLng.toFixed(4)}`
-                        : isEn
-                        ? '📌 No GPS saved yet (will auto-pin on next bus tap)'
-                        : '📌 저장된 GPS 좌표 없음 (다음 첫 태그 시 자동 기억)'}
-                    </div>
-                    {typeof editingStudent.stopLat === 'number' && (
-                      <label className="flex items-center gap-2 text-[11px] font-extrabold text-amber-800 cursor-pointer pt-1">
-                        <input
-                          type="checkbox"
-                          checked={editResetGps}
-                          onChange={(e) => setEditResetGps(e.target.checked)}
-                          className="w-4 h-4 accent-amber-500"
-                        />
-                        <span>
-                          {isEn
-                            ? 'Reset GPS coordinates (re-pin on next tap)'
-                            : '정류장 GPS 좌표 초기화 (다음 첫 태그 시 위치 다시 기억)'}
-                        </span>
-                      </label>
-                    )}
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
@@ -3881,32 +3884,11 @@
                     onClick={async () => {
                       if (!editName.trim()) return;
                       const cleanName = editName.trim();
-                      const cleanStop = editStop.trim() || '정문 앞 정류장';
+                      const cleanStop = editStop.trim() || 'Main Gate Stop';
                       const finalUid = (
                         editUid.trim() ||
                         'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
                       ).toUpperCase();
-
-                      const duplicateOwners = students.filter(
-                        (s) =>
-                          s.id !== editingStudent.id &&
-                          !finalUid.startsWith('UNASSIGNED-') &&
-                          (s.uid || '').toUpperCase() === finalUid
-                      );
-
-                      if (duplicateOwners.length > 0) {
-                        const ownerNames = duplicateOwners.map((o) => sName(o)).join(', ');
-                        const ok = window.confirm(
-                          isEn
-                            ? `NFC UID (${finalUid}) is currently assigned to [${ownerNames}]. Transfer it to [${cleanName}] and unassign from [${ownerNames}]?`
-                            : `이 NFC 고유번호(${finalUid})는 현재 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전하고 기존 매핑을 해제할까요?`
-                        );
-                        if (!ok) return;
-                      }
-
-                      if (editResetGps) {
-                        delete etaSentLockRef.current[editingStudent.id];
-                      }
 
                       const editedObj = {
                         ...editingStudent,
@@ -3919,39 +3901,18 @@
                         stopLng: editResetGps ? null : editingStudent.stopLng
                       };
 
-                      const updatedList = students.map((s) => {
-                        if (s.id === editingStudent.id) return editedObj;
-                        if (
-                          !finalUid.startsWith('UNASSIGNED-') &&
-                          (s.uid || '').toUpperCase() === finalUid
-                        ) {
-                          return {
-                            ...s,
-                            uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
-                          };
-                        }
-                        return s;
-                      });
-
-                      setStudents(updatedList);
-
-                      for (const oldStu of duplicateOwners) {
-                        await syncSingleStudentToDb({
-                          ...oldStu,
-                          uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
-                        });
-                      }
-                      const savedOk = await syncSingleStudentToDb(editedObj);
+                      setStudents((prev) =>
+                        prev.map((s) => (s.id === editingStudent.id ? editedObj : s))
+                      );
+                      await syncSingleStudentToDb(editedObj);
 
                       setEditingStudent(null);
                       setCapturingUidForEdit(false);
-                      if (savedOk) {
-                        showToast(
-                          isEn
-                            ? `✅ Updated [${cleanName}] & saved to DB!`
-                            : `✅ [${cleanName}] 정보가 수정되고 DB에 저장되었습니다!`
-                        );
-                      }
+                      showToast(
+                        isEn
+                          ? `✅ Updated [${cleanName}]!`
+                          : `✅ [${cleanName}] 정보가 수정되었습니다!`
+                      );
                     }}
                     className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs"
                   >
@@ -3979,7 +3940,7 @@
                   type="text"
                   value={inviteCodeInput}
                   onChange={(e) => setInviteCodeInput(e.target.value)}
-                  placeholder={isEn ? 'e.g., TAEHA-7788' : '예: TAEHA-7788'}
+                  placeholder={isEn ? 'e.g., LEO-7788' : '예: LEO-7788'}
                   className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-200 text-center font-mono font-black uppercase text-sm"
                 />
                 <button
@@ -4047,8 +4008,8 @@
                 <div className="flex items-center justify-between border-b pb-3">
                   <h3 className="font-black text-base text-slate-900">
                     {isEn
-                      ? '☁️ Device QR Deployment Center (Role-Separated)'
-                      : '☁️ 기기별 전용 QR 배포 센터 (권한 분리형)'}
+                      ? '☁️ Device QR & Cloud Sync Center'
+                      : '☁️ 기기별 전용 QR 배포 및 클라우드 연동'}
                   </h3>
                   <button onClick={() => setCloudModalOpen(false)} className="text-slate-400 font-bold px-2">✕</button>
                 </div>
@@ -4083,26 +4044,6 @@
                     }
                     className="w-full px-3 py-2.5 rounded-xl border-2 border-emerald-400 font-mono text-xs"
                   />
-
-                  {isGoogleSandbox && (
-                    <div className="p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-300 space-y-2 mt-2">
-                      <div className="text-xs font-black text-rose-900">
-                        {isEn
-                          ? '⚠️ Enter your public GitHub Pages URL (e.g., https://ksyunsai.github.io/schooltap)'
-                          : '⚠️ GitHub Pages 공개 주소(예: https://ksyunsai.github.io/schooltap)를 입력해 주세요'}
-                      </div>
-                      <input
-                        type="url"
-                        value={publicSiteUrl}
-                        onChange={(e) => {
-                          setPublicSiteUrl(e.target.value);
-                          localStorage.setItem('schooltap_public_url', e.target.value.trim());
-                        }}
-                        placeholder="https://ksyunsai.github.io/schooltap"
-                        className="w-full px-3 py-2 rounded-xl border-2 border-rose-400 bg-white font-mono text-xs"
-                      />
-                    </div>
-                  )}
                 </div>
 
                 {canShowPublicQr && (
@@ -4110,21 +4051,18 @@
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
                       <div className="text-xs font-black text-amber-950 text-center">
                         {isEn
-                          ? '📸 QR links automatically hide admin menus on Parent phones!'
-                          : '📸 부모님 폰(2번)에서는 관리자 메뉴가 완전히 숨겨지고 초대코드 입력창이 뜹니다!'}
+                          ? '📸 QR links automatically open in the selected language!'
+                          : '📸 전용 QR 링크로 버스 단말기와 학부모 앱을 분리 배포할 수 있습니다!'}
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-center">
                         <div className="bg-white p-3 rounded-2xl border border-slate-200">
                           <div className="text-xs font-black text-slate-900 mb-1">
-                            {isEn ? '📲 Phone #1 (Bus Reader)' : '📲 갤럭시 1번 (버스 단말기 전용)'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mb-2">
-                            {isEn ? 'Auto NFC + Live GPS Kiosk' : '실물 NFC + 실시간 GPS 키오스크'}
+                            {isEn ? '📲 Phone #1 (Bus Reader)' : '📲 버스 단말기 전용'}
                           </div>
                           <img
-                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(buildRoleUrl('READER'))}`}
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(buildRoleUrl('READER'))}`}
                             alt="Reader QR"
-                            className="w-36 h-36 mx-auto rounded-lg"
+                            className="w-32 h-32 mx-auto rounded-lg"
                           />
                           <button
                             onClick={() => {
@@ -4141,15 +4079,12 @@
 
                         <div className="bg-white p-3 rounded-2xl border-2 border-amber-400">
                           <div className="text-xs font-black text-amber-700 mb-1">
-                            {isEn ? '💛 Phone #2 (Parent App)' : '💛 갤럭시 2번 (학부모 앱 공용)'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mb-2">
-                            {isEn ? 'Invite code login · My child only' : '초대코드 입력 후 내 아이만 표시'}
+                            {isEn ? '💛 Phone #2 (Parent App)' : '💛 학부모 앱 공용'}
                           </div>
                           <img
-                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(buildRoleUrl('PARENT'))}`}
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(buildRoleUrl('PARENT'))}`}
                             alt="Parent QR"
-                            className="w-36 h-36 mx-auto rounded-lg"
+                            className="w-32 h-32 mx-auto rounded-lg"
                           />
                           <button
                             onClick={() => {
@@ -4165,111 +4100,15 @@
                         </div>
                       </div>
                     </div>
-
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
-                      <div className="text-xs font-black text-slate-900">
-                        {isEn
-                          ? '💌 1-on-1 Direct Parent Invite QRs (Auto-links child upon scan!)'
-                          : '💌 어린이별 1:1 맞춤 학부모 안내장 QR (스캔 즉시 해당 아이 부모님으로 자동 등록!)'}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2.5">
-                        {students.map((s) => (
-                          <div key={s.id} className="bg-white p-3 rounded-2xl border border-slate-200 text-center space-y-1.5">
-                            <div className="text-xs font-black text-slate-900">
-                              {s.avatarEmoji}{' '}
-                              {isEn ? `${sName(s)}'s Parent QR` : `${sName(s)} 학부모님 전용 QR`}
-                            </div>
-                            <div className="text-[10px] font-mono font-bold text-amber-700">
-                              {isEn ? 'Code' : '코드'}: {s.inviteCode}
-                            </div>
-                            <img
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(buildRoleUrl('PARENT', s.inviteCode))}`}
-                              alt={sName(s)}
-                              className="w-28 h-28 mx-auto rounded-lg"
-                            />
-                            <button
-                              onClick={() => {
-                                safeCopyText(buildRoleUrl('PARENT', s.inviteCode));
-                                showToast(
-                                  isEn
-                                    ? `Copied direct parent link for ${sName(s)}!`
-                                    : `${sName(s)} 학부모님 전용 직통 링크 복사 완료!`
-                                );
-                              }}
-                              className="w-full py-1 rounded-lg bg-amber-100 text-amber-950 text-[10px] font-black"
-                            >
-                              {isEn ? `Copy ${sName(s)}'s Link` : `${sName(s)} 부모님 링크 복사`}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   </div>
                 )}
-
-                <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-black text-indigo-950">
-                      {isEn
-                        ? '3. VAPID Public Key (Background Web Push / FCM)'
-                        : '3. VAPID 공개키 (앱 종료·백그라운드 푸시용)'}
-                    </label>
-                    {pushSyncStatus && (
-                      <span className="text-[10px] font-black text-indigo-800">{pushSyncStatus}</span>
-                    )}
-                  </div>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      value={vapidPubKey}
-                      onChange={(e) => {
-                        const v = e.target.value.trim();
-                        setVapidPubKey(v);
-                        localStorage.setItem('schooltap_vapid_pub', v);
-                      }}
-                      placeholder={
-                        isEn
-                          ? 'Paste Web Push VAPID Public Key'
-                          : 'Web Push VAPID 공개키 붙여넣기'
-                      }
-                      className="flex-1 px-3 py-2 rounded-xl border border-indigo-300 bg-white font-mono text-xs"
-                    />
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const permOk = await requestSystemNotificationPermission(false);
-                        if (permOk || Notification.permission === 'granted') {
-                          const sub = await subscribeBackgroundPush(vapidPubKey);
-                          if (sub) {
-                            showToast(
-                              isEn
-                                ? '✅ Background push subscription registered!'
-                                : '✅ 백그라운드 푸시 구독이 등록되었습니다!'
-                            );
-                          }
-                        }
-                      }}
-                      className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shrink-0"
-                    >
-                      {isEn ? '📲 Register Push' : '📲 푸시 구독'}
-                    </button>
-                  </div>
-                  {pushSubJson && (
-                    <div className="text-[10px] font-mono text-indigo-700 truncate">
-                      ✔ 구독 Endpoint 등록됨
-                    </div>
-                  )}
-                </div>
 
                 <button
                   onClick={() => {
                     localStorage.setItem('schooltap_sb_url', sbUrl.trim());
                     localStorage.setItem('schooltap_sb_key', sbKey.trim());
-                    if (vapidPubKey.trim()) {
-                      localStorage.setItem('schooltap_vapid_pub', vapidPubKey.trim());
-                    }
                     setCloudModalOpen(false);
-                    showToast(isEn ? '☁️ Cloud settings saved!' : '☁️ 설정 저장 완료!');
+                    showToast(isEn ? '☁️ Settings saved!' : '☁️ 설정 저장 완료!');
                   }}
                   className="w-full py-3 rounded-2xl bg-emerald-600 text-white font-black text-xs"
                 >
@@ -4279,7 +4118,7 @@
             </div>
           )}
 
-          {/* 상단 헤더 */}
+          {/* Top Header */}
           <header className="sticky top-0 z-30 bg-[#FFFDF7]/95 backdrop-blur border-b border-amber-200">
             <div className="max-w-3xl mx-auto px-4 py-3 space-y-2.5">
               <div className="flex items-center justify-between gap-2">
@@ -4287,7 +4126,7 @@
                   <span className="w-9 h-9 rounded-2xl bg-amber-400 flex items-center justify-center text-lg shadow-xs">🚌</span>
                   <div>
                     <h1 className="text-base font-black leading-none">
-                      SchoolTap{' '}
+                      SchoolTap™{' '}
                       <span className="text-amber-600">
                         {deviceRole === 'PARENT'
                           ? isEn
@@ -4298,8 +4137,8 @@
                             ? 'Bus Reader'
                             : '차량 단말기'
                           : isEn
-                          ? 'Admin Console'
-                          : '원장님 관리콘솔'}
+                          ? 'Live Demo'
+                          : '통합 시제품'}
                       </span>
                     </h1>
                     <span
@@ -4311,20 +4150,16 @@
                           ? isEn
                             ? '🟢 Live Bubble & GPS Alerts Active'
                             : '🟢 실시간 안심 버블 & GPS 알림 켜짐'
-                          : cloudStatus === 'ERROR'
-                          ? isEn
-                            ? '🔴 DB / API Key Error (Tap to Fix)'
-                            : '🔴 DB / API 키 오류 (여기를 눌러 확인)'
                           : isEn
-                          ? '🟡 Tap here to enter API Key'
-                          : '🟡 여기를 눌러 API 키 연결'
+                          ? '✨ Interactive Parent Experience'
+                          : '✨ 학부모 안심 버블 체험 모드'
                         : deviceRole === 'READER'
                         ? isEn
                           ? 'Auto NFC + Live GPS Geofence'
                           : '무인 NFC 스캔 + 실시간 GPS 감시'
                         : isEn
-                        ? `School & Fleet Management (${schoolId})`
-                        : `PC / 사업주 통합 관리 모드 (${schoolId})`}
+                        ? 'K-8 NFC Bus Safety · Tap 🇰🇷 한국어 anytime'
+                        : 'K-8 스마트 통학 안전 · 우측 버튼으로 영어 전환'}
                     </span>
                   </div>
                 </div>
@@ -4336,7 +4171,7 @@
                       className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border ${
                         cloudStatus === 'CONNECTED'
                           ? 'bg-emerald-500 border-emerald-600 text-white'
-                          : 'bg-white border-emerald-400 text-emerald-800'
+                          : 'bg-white border-amber-300 text-slate-800'
                       }`}
                     >
                       {cloudStatus === 'CONNECTED'
@@ -4344,8 +4179,8 @@
                           ? '🟢 QR Center'
                           : '🟢 QR 배포센터'
                         : isEn
-                        ? '☁️ Connect Phones'
-                        : '☁️ 갤럭시 2대 연결'}
+                        ? '☁️ QR / Cloud'
+                        : '☁️ QR · 클라우드'}
                     </button>
                   )}
 
@@ -4358,11 +4193,13 @@
                     </button>
                   )}
 
+                  {/* Single-button Language Switcher: English default, 1-tap toggle to Korean */}
                   <button
                     onClick={() => setLang(isEn ? 'ko' : 'en')}
-                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-extrabold"
+                    title={isEn ? 'Switch to Korean (한국어)' : 'Switch to English'}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold shadow-xs transition active:scale-95"
                   >
-                    {isEn ? '🇰🇷 KR' : '🇺🇸 US'}
+                    {isEn ? '🇰🇷 한국어' : '🇺🇸 English'}
                   </button>
                 </div>
               </div>
@@ -4370,12 +4207,12 @@
               {deviceRole === 'ADMIN' && (
                 <div className="grid grid-cols-3 gap-1.5">
                   <button
-                    onClick={() => setAdminTab('OFFICE')}
+                    onClick={() => setAdminTab('PARENT_PREVIEW')}
                     className={`py-2 rounded-2xl text-xs font-black border ${
-                      adminTab === 'OFFICE' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600'
+                      adminTab === 'PARENT_PREVIEW' ? 'bg-amber-400 border-amber-500 text-slate-950' : 'bg-white border-slate-200 text-slate-600'
                     }`}
                   >
-                    {isEn ? '🏫 Roster & Charms' : '🏫 키링·원생 관리'}
+                    {isEn ? '💛 Parent App' : '💛 학부모 앱 화면'}
                   </button>
                   <button
                     onClick={() => setAdminTab('READER')}
@@ -4383,40 +4220,38 @@
                       adminTab === 'READER' ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600'
                     }`}
                   >
-                    {isEn ? '📲 Bus Reader View' : '📲 단말기 화면보기'}
+                    {isEn ? '🚌 Bus Reader' : '🚌 버스 단말기'}
                   </button>
                   <button
-                    onClick={() => setAdminTab('PARENT_PREVIEW')}
+                    onClick={() => setAdminTab('OFFICE')}
                     className={`py-2 rounded-2xl text-xs font-black border ${
-                      adminTab === 'PARENT_PREVIEW' ? 'bg-amber-400 border-amber-500 text-slate-950' : 'bg-white border-slate-200 text-slate-600'
+                      adminTab === 'OFFICE' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600'
                     }`}
                   >
-                    {isEn ? '💛 Parent View' : '💛 학부모 화면보기'}
+                    {isEn ? '🏫 Roster & NFC' : '🏫 원생·키링 관리'}
                   </button>
                 </div>
               )}
             </div>
           </header>
 
-          <main className="max-w-3xl mx-auto px-4 pt-4">
-            {deviceRole === 'PARENT' ? (
-              renderDedicatedParentView()
-            ) : deviceRole === 'READER' ? (
-              renderBusReaderView()
-            ) : adminTab === 'OFFICE' ? (
-              renderAdminOfficeView()
-            ) : adminTab === 'READER' ? (
-              renderBusReaderView()
-            ) : (
-              renderDedicatedParentView()
-            )}
-          </main>
-
           {toast && (
-            <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-black shadow-xl max-w-sm w-[90%] text-center">
+            <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-extrabold shadow-xl max-w-[92vw] text-center">
               {toast}
             </div>
           )}
+
+          <main className="max-w-3xl mx-auto px-4 pt-5">
+            {deviceRole === 'PARENT'
+              ? renderDedicatedParentView()
+              : deviceRole === 'READER'
+              ? renderBusReaderView()
+              : adminTab === 'OFFICE'
+              ? renderAdminOfficeView()
+              : adminTab === 'READER'
+              ? renderBusReaderView()
+              : renderDedicatedParentView()}
+          </main>
         </div>
       );
     }

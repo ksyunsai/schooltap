@@ -1,4 +1,4 @@
-// SchoolTap™ Service Worker (옵션 B: 백그라운드 푸시 및 알림 클릭 핸들러)
+// SchoolTap™ Service Worker (Background Push & Notification Click Handler)
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -13,13 +13,13 @@ self.addEventListener('push', (event) => {
     payload = event.data ? event.data.json() : {};
   } catch (e) {
     payload = {
-      title: 'SchoolTap™ 통학 안심 알림',
-      body: event.data ? event.data.text() : '새로운 통학 알림이 도착했습니다.'
+      title: 'SchoolTap™ Smart Bus Alert',
+      body: event.data ? event.data.text() : 'New school bus update received.'
     };
   }
 
-  const title = payload.title || payload.notification?.title || '🚌 SchoolTap™ 통학 알림';
-  const body = payload.body || payload.notification?.body || '우리 아이 통학 상태가 업데이트되었습니다.';
+  const title = payload.title || payload.notification?.title || '🚌 SchoolTap™ Bus Alert';
+  const body = payload.body || payload.notification?.body || 'Your child’s bus ride status was updated.';
   const tag = payload.tag || 'schooltap-push-' + Date.now();
   const targetUrl = payload.url || payload.data?.url || './';
 
