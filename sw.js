@@ -1,5 +1,5 @@
 const RECEIVER_VERSION = 'locale-2';
-importScripts('./ride-messages.js?v=' + RECEIVER_VERSION, './ride-alerts.js?v=' + RECEIVER_VERSION);
+importScripts('./ride-messages.js?v=ride-copy-3', './ride-alerts.js?v=ride-copy-3');
 
 // SchoolTap™ Service Worker (Background Push & Notification Click Handler)
 self.addEventListener('install', (event) => {

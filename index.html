@@ -30,8 +30,8 @@
     }
   </script>
   <script src="./notification-receiver.js?rev=locale-2"></script>
-  <script src="./ride-messages.js?rev=locale-2"></script>
-  <script src="./ride-alerts.js?rev=locale-2"></script>
+  <script src="./ride-messages.js?rev=ride-copy-3"></script>
+  <script src="./ride-alerts.js?rev=ride-copy-3"></script>
   <!-- Leaflet Free OpenStreetMap CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -1009,6 +1009,7 @@
         return localStorage.getItem('schooltap_vapid_pub') || '';
       });
       const [pushSyncStatus, setPushSyncStatus] = useState('idle');
+      const [savedPushLanguage, setSavedPushLanguage] = useState('');
       const [pushRetry, setPushRetry] = useState(0);
       const pushWork = useRef(Promise.resolve());
       const unlinkInProgress = useRef(false);
@@ -1210,7 +1211,7 @@
           cloud: ['Open the parent QR link with school cloud settings.', '학교 서버 연결이 필요합니다. 관리자 화면에서 발급한 학부모 QR 링크로 접속해 주세요.'],
           key: ['The school’s Web Push public key is missing. Use an updated parent QR link.', '학교의 푸시 공개키가 없습니다. 관리자가 공개키를 저장한 뒤 새 학부모 QR 링크로 접속해 주세요.'],
           syncing: ['Registering this phone with the school…', '학교 서버에 이 휴대폰을 등록하는 중입니다.'],
-          registered: ['This phone is registered for ride notifications.', '학교 서버에 이 휴대폰의 승하차 푸시가 등록됐습니다.'],
+          registered: ['This phone is registered. Push language saved at school: English.', '학교 서버에 이 휴대폰의 푸시 언어를 한국어로 저장했어요.'],
           rejected: ['The school server did not save this subscription. Tap the test button to retry.', '학교 서버에 푸시 구독을 저장하지 못했습니다. 테스트 버튼을 눌러 다시 시도해 주세요.'],
           unsupported: ['This browser does not support background push.', '이 브라우저에서는 앱을 닫은 뒤 푸시를 받을 수 없습니다.'],
           failed: ['Could not register this phone for background push. Check the school’s public key and retry.', '휴대폰의 푸시 구독에 실패했습니다. 학교의 푸시 공개키를 확인하고 다시 시도해 주세요.']
@@ -1218,7 +1219,8 @@
         const i = isEn ? 0 : 1;
         const test = notifPermission === 'denied' ? 'blocked' : sampleStatus;
         const status = notifPermission !== 'granted' ? 'idle'
-          : !parentLinkedCodes.length ? 'child' : !sbUrl || !sbKey ? 'cloud' : pushSyncStatus;
+          : !parentLinkedCodes.length ? 'child' : !sbUrl || !sbKey ? 'cloud'
+          : pushSyncStatus === 'registered' && savedPushLanguage !== lang ? 'syncing' : pushSyncStatus;
         return (
           <div role="status" aria-live="polite" className="space-y-1 text-[11px] text-slate-700">
             {sample[test] && <p>{sample[test][i]}</p>}
@@ -1984,21 +1986,26 @@
               });
             }
             if (cancelled) return;
-            const json = sub.toJSON();
+            const preferred = localStorage.getItem('schooltap_preferred_lang');
+            if ((preferred === 'en' || preferred === 'ko') && preferred !== lang) return;
+            const json = { ...sub.toJSON(), lang };
             const rows = parentLinkedCodes.map(code => ({
               id: `sub-${schoolId}-${code}-${sub.endpoint.slice(-16)}`,
               school_id: schoolId, invite_code: code, endpoint: sub.endpoint, subscription_json: json,
               paused_date: isPausedToday ? getTodayKstDateStr() : null, updated_at: new Date().toISOString()
             }));
             const { error } = await client.from('schooltap_push_subscriptions').upsert(rows, { onConflict: 'id' });
-            if (!cancelled) setPushSyncStatus(error ? 'rejected' : 'registered');
+            if (!cancelled) {
+              if (!error) setSavedPushLanguage(lang);
+              setPushSyncStatus(error ? 'rejected' : 'registered');
+            }
           } catch {
             if (!cancelled) setPushSyncStatus('failed');
           }
         };
         pushWork.current = pushWork.current.then(sync);
         return () => { cancelled = true; };
-      }, [notifPermission, deviceRole, schoolId, parentLinkedCodes, sbUrl, sbKey, vapidPubKey, isPausedToday, pushRetry]);
+      }, [notifPermission, deviceRole, schoolId, parentLinkedCodes, sbUrl, sbKey, vapidPubKey, isPausedToday, pushRetry, lang]);
 
       // Approaching ETA Alert Helper
       const sendApproachingAlert = useCallback(

@@ -5,7 +5,7 @@
     BOARD: {ko: '🚌 승차 태그', en: '🚌 Boarding tap'},
     ALIGHT: {ko: '👋 하차 태그', en: '👋 Exit tap'},
     APPROACHING_10M: {ko: '📍 정류장 도착 예정', en: '📍 Bus approaching'},
-    NO_ALIGHT_1H: {ko: '🏷️ 하차 태그 미확인', en: '🏷️ No exit tap recorded'},
+    NO_ALIGHT_1H: {ko: '🏷️ 승차 1시간 후 하차 태그 미확인', en: '🏷️ No exit tap 1 hour after boarding'},
     TEST: {ko: '🔔 스쿨탭 테스트 알림', en: '🔔 SchoolTap test notification'},
     UPDATE: {ko: '💌 스쿨탭 소식', en: '💌 SchoolTap update'}
   };
