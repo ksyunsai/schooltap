@@ -1,3 +1,5 @@
+importScripts('./ride-messages.js', './ride-alerts.js');
+
 // SchoolTap™ Service Worker (Background Push & Notification Click Handler)
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -20,32 +22,25 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('push', (event) => {
-  let payload = {};
-  try {
-    payload = event.data ? event.data.json() : {};
-  } catch (e) {
-    payload = {
-      title: 'SchoolTap™ Smart Bus Alert',
-      body: event.data ? event.data.text() : 'New school bus update received.'
-    };
-  }
-
-  const title = payload.title || payload.notification?.title || '🚌 SchoolTap™ Bus Alert';
-  const body = payload.body || payload.notification?.body || 'Your child’s bus ride status was updated.';
-  const tag = payload.tag || payload.data?.event_id || 'schooltap-push-' + Date.now();
-  const targetUrl = payload.url || payload.data?.url || './?role=PARENT';
-  const iconUrl = new URL('./icons/schooltap-192.png', self.registration.scope).href;
-
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag,
+  event.waitUntil((async () => {
+    let payload;
+    try {
+      payload = event.data?.json();
+    } catch {
+      payload = event.data?.text();
+    }
+    const lang = await schoolTapAlerts.readLanguage();
+    const notice = schoolTapAlerts.format(payload, lang);
+    await self.registration.showNotification(notice.title, {
+      body: notice.body,
+      lang,
+      tag: notice.tag || 'schooltap-push-' + Date.now(),
       renotify: true,
       vibrate: [220, 100, 220],
-      icon: iconUrl,
-      data: { url: targetUrl }
-    })
-  );
+      icon: new URL('./icons/schooltap-192.png', self.registration.scope).href,
+      data: { url: notice.url || './?role=PARENT' }
+    });
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

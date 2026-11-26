@@ -32,6 +32,8 @@
       ? navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => null)
       : Promise.resolve(null);
   </script>
+  <script src="./ride-messages.js"></script>
+  <script src="./ride-alerts.js"></script>
   <!-- Leaflet Free OpenStreetMap CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -211,10 +213,10 @@
       return bytes.length === 65 && bytes.charCodeAt(0) === 4;
     }
 
-    async function dispatchSystemBannerNotification({ title, body, tag, role }) {
+    async function dispatchSystemBannerNotification({ title, body, tag, lang, role }) {
       if (!('Notification' in window) || Notification.permission !== 'granted') return false;
       const options = {
-        body, tag, renotify: Boolean(tag), vibrate: [220, 100, 220],
+        body, tag, lang, renotify: Boolean(tag), vibrate: [220, 100, 220],
         icon: new URL('./icons/schooltap-192.png', location.href).href,
         data: { url: role === 'PARENT' ? './?role=PARENT' : './' }
       };
@@ -802,6 +804,8 @@
 
       // Default language is English ('en'), with 1-tap toggle to Korean ('ko')
       const [lang, setLang] = useState(() => {
+        const preferred = localStorage.getItem('schooltap_preferred_lang');
+        if (preferred === 'en' || preferred === 'ko') return preferred;
         const pLang = params.get('lang');
         if (pLang === 'ko' || pLang === 'en') {
           localStorage.setItem('schooltap_lang_v2', pLang);
@@ -812,9 +816,24 @@
       });
 
       const isEn = lang === 'en';
+      const chooseLanguage = (next) => {
+        localStorage.setItem('schooltap_preferred_lang', next);
+        setLang(next);
+      };
+
+      useEffect(() => {
+        const followLanguage = (event) => {
+          if (event.key === 'schooltap_preferred_lang' && (event.newValue === 'ko' || event.newValue === 'en')) {
+            setLang(event.newValue);
+          }
+        };
+        window.addEventListener('storage', followLanguage);
+        return () => window.removeEventListener('storage', followLanguage);
+      }, []);
 
       useEffect(() => {
         localStorage.setItem('schooltap_lang_v2', lang);
+        schoolTapAlerts.saveLanguage(lang);
         document.documentElement.lang = lang;
         document.title = isEn
           ? 'SchoolTap™ | Smart Bus Bubble Alerts'
@@ -1121,10 +1140,7 @@
               : vehicleName;
           return {
             emoji: item.emoji,
-            title: item.title
-              .replace(/\{vehicle\}/g, vName)
-              .replace(/\{stop\}/g, stopStr)
-              .replace(/\{eta\}/g, etaStr),
+            title: schoolTapAlerts.bodyFor(Object.hasOwn(QUOTES, log.type) ? log.type : 'UPDATE', lang, log.phraseIdx ?? 0),
             sub: item.sub
               .replace(/\{vehicle\}/g, vName)
               .replace(/\{stop\}/g, stopStr)
@@ -1150,8 +1166,7 @@
           setSampleStatus('sending');
           setPushRetry(value => value + 1);
           const sent = await dispatchSystemBannerNotification({
-            title: isEn ? 'SchoolTap test notification' : '스쿨탭 테스트 알림',
-            body: isEn ? 'This notification is from SchoolTap on this phone.' : '이 휴대폰에서 보낸 스쿨탭 알림입니다.',
+            ...schoolTapAlerts.format({ event_type: 'TEST' }, lang),
             tag: 'schooltap-test', role: deviceRole
           });
           setSampleStatus(sent ? 'sent' : 'failed');
@@ -1446,34 +1461,11 @@
       const showRideAlert = useCallback((log) => {
         setPopupLog(log);
         const targetKid = studentsRef.current.find((s) => s.id === log.studentId);
-        const kidDisplay = targetKid
-          ? sName(targetKid)
-          : log.studentName || (isEn ? 'Your child' : '우리 아이');
-        const q = resolveQuote(log);
-        const badgeTitle =
-          log.type === 'NO_ALIGHT_1H'
-            ? isEn
-              ? `🏷️ [${kidDisplay}] Exit Tap Missed — Please Check In`
-              : `🏷️ [${kidDisplay}] 하차 태그를 잊은 것 같아요`
-            : log.type === 'APPROACHING_10M'
-            ? isEn
-              ? `📍 [${kidDisplay}] Bus Arriving in ~${log.etaMinutes || 10}m`
-              : `📍 [${kidDisplay}] 정류장 도착 약 ${log.etaMinutes || 10}분 전`
-            : log.type === 'ALIGHT'
-            ? isEn
-              ? `🏫 [${kidDisplay}] Safe Drop-off Confirmed`
-              : `🏫 [${kidDisplay}] 안전 하차 완료`
-            : isEn
-            ? `🚌 [${kidDisplay}] Boarding Confirmed`
-            : `🚌 [${kidDisplay}] 버스 승차 완료`;
-
-        dispatchSystemBannerNotification({
-          title: badgeTitle,
-          body: `${q.emoji} ${q.title}`,
-          tag: log.id,
-          role: deviceRole
-        });
-      }, [sName, isEn, resolveQuote, deviceRole]);
+        const notification = schoolTapAlerts.format({
+          ...log, nameEn: targetKid?.nameEn, nameKo: targetKid?.nameKo
+        }, lang);
+        dispatchSystemBannerNotification({ ...notification, tag: log.id, role: deviceRole });
+      }, [lang, deviceRole]);
 
       const handleIncomingRideLog = useCallback(
         (rawRow, isHistory = false) => {
@@ -2009,7 +2001,7 @@
             stopKo: target.stopKo,
             stopEn: target.stopEn,
             tagTimeMs: nowMs,
-            phraseIdx: Math.floor(Math.random() * 10)
+            phraseIdx: schoolTapAlerts.randomIndex('APPROACHING_10M', lang)
           };
           etaSentLockRef.current[target.id] = true;
           setLogs((prev) => [etaLog, ...prev]);
@@ -2038,6 +2030,7 @@
           currentStudent,
           students,
           activePreset,
+          lang,
           approachingEnabled,
           showRideAlert,
           approachingMins,
@@ -2077,7 +2070,7 @@
             stopKo: target.stopKo,
             stopEn: target.stopEn,
             tagTimeMs: nowMs,
-            phraseIdx: Math.floor(Math.random() * 10)
+            phraseIdx: schoolTapAlerts.randomIndex('NO_ALIGHT_1H', lang)
           };
           setLogs((prev) => [alertLog, ...prev]);
           insertRideLogToDb(alertLog);
@@ -2098,7 +2091,7 @@
               : `🏷️ [${sName(target)}] 학부모님께 하차 태그 확인 안내 버블을 보냈습니다.`
           );
         },
-        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, isPausedToday, showRideAlert, showToast]
+        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, lang, isEn, sName, isPausedToday, showRideAlert, showToast]
       );
 
       useEffect(() => {
@@ -2381,7 +2374,7 @@
           }
 
           const actionType = stu.activeSession ? 'ALIGHT' : 'BOARD';
-          const phraseIdx = Math.floor(Math.random() * 10);
+          const phraseIdx = schoolTapAlerts.randomIndex(actionType, lang);
 
           if (actionType === 'ALIGHT') {
             delete etaSentLockRef.current[stu.id];
@@ -4193,7 +4186,7 @@
 
                   {/* Single-button Language Switcher: English default, 1-tap toggle to Korean */}
                   <button
-                    onClick={() => setLang(isEn ? 'ko' : 'en')}
+                    onClick={() => chooseLanguage(isEn ? 'ko' : 'en')}
                     title={isEn ? 'Switch to Korean (한국어)' : 'Switch to English'}
                     className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold shadow-xs transition active:scale-95"
                   >
