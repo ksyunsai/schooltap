@@ -1,8 +1,9 @@
-importScripts('./ride-messages.js', './ride-alerts.js');
+const RECEIVER_VERSION = 'locale-2';
+importScripts('./ride-messages.js?v=' + RECEIVER_VERSION, './ride-alerts.js?v=' + RECEIVER_VERSION);
 
 // SchoolTap™ Service Worker (Background Push & Notification Click Handler)
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
@@ -15,31 +16,62 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode !== 'navigate') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || (url.pathname !== appPath && url.pathname !== appPath + 'index.html')) return;
-  event.respondWith(fetch(event.request).catch(() => new Response(
+  event.respondWith(fetch(event.request, { cache: 'no-cache' }).catch(() => new Response(
     'SchoolTap · Connect to the internet and reload. 인터넷에 연결한 뒤 새로고침해 주세요.',
     { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }
   )));
 });
 
+async function showPush(payload, expectedLanguage) {
+  const lang = await schoolTapAlerts.readLanguage();
+  if (expectedLanguage && lang !== expectedLanguage) throw new Error('Notification language changed');
+  const notice = schoolTapAlerts.format(payload, lang);
+  await self.registration.showNotification(notice.title, {
+    body: notice.body,
+    lang,
+    tag: notice.tag || 'schooltap-push-' + Date.now(),
+    renotify: true,
+    vibrate: [220, 100, 220],
+    icon: new URL('./icons/schooltap-192.png', self.registration.scope).href,
+    data: { url: notice.url || './?role=PARENT' }
+  });
+  return notice;
+}
+
 self.addEventListener('push', (event) => {
+  let payload;
+  try {
+    payload = event.data?.json();
+  } catch {
+    payload = event.data?.text();
+  }
+  event.waitUntil(showPush(payload));
+});
+
+self.addEventListener('message', (event) => {
+  const request = event.data;
+  const port = event.ports?.[0];
+  if (request?.type !== 'SCHOOLTAP_RECEIVER' || !port) return;
   event.waitUntil((async () => {
-    let payload;
+    const failure = { ok: false, version: RECEIVER_VERSION };
     try {
-      payload = event.data?.json();
+      if (request.version !== RECEIVER_VERSION || !['sync','test'].includes(request.action)
+          || !['ko','en'].includes(request.lang)) return port.postMessage(failure);
+      const saved = await schoolTapAlerts.saveLanguage(request.lang);
+      if (!saved) return port.postMessage(failure);
+      const reply = { ok: true, version: RECEIVER_VERSION, lang: request.lang };
+      if (request.action === 'test') {
+        const url = ['PARENT','READER'].includes(request.role) ? './?role=' + request.role : './';
+        const notice = await showPush({ event_type: 'TEST', tag: 'schooltap-test', url }, request.lang);
+        reply.title = notice.title;
+        reply.body = notice.body;
+      }
+      port.postMessage(reply);
     } catch {
-      payload = event.data?.text();
+      port.postMessage(failure);
+    } finally {
+      port.close?.();
     }
-    const lang = await schoolTapAlerts.readLanguage();
-    const notice = schoolTapAlerts.format(payload, lang);
-    await self.registration.showNotification(notice.title, {
-      body: notice.body,
-      lang,
-      tag: notice.tag || 'schooltap-push-' + Date.now(),
-      renotify: true,
-      vibrate: [220, 100, 220],
-      icon: new URL('./icons/schooltap-192.png', self.registration.scope).href,
-      data: { url: notice.url || './?role=PARENT' }
-    });
   })());
 });
 

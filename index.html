@@ -28,12 +28,10 @@
     if (launchRole === 'parent' || launchRole === 'reader') {
       document.querySelector('link[rel="manifest"]').href = './' + launchRole + '.webmanifest';
     }
-    const schoolTapWorker = 'serviceWorker' in navigator
-      ? navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => null)
-      : Promise.resolve(null);
   </script>
-  <script src="./ride-messages.js"></script>
-  <script src="./ride-alerts.js"></script>
+  <script src="./notification-receiver.js?rev=locale-2"></script>
+  <script src="./ride-messages.js?rev=locale-2"></script>
+  <script src="./ride-alerts.js?rev=locale-2"></script>
   <!-- Leaflet Free OpenStreetMap CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -192,21 +190,6 @@
       tagged_at_ms: Number(log.tagTimeMs) || Date.now()
     });
 
-    async function activeNotificationWorker() {
-      const registration = await schoolTapWorker;
-      if (!registration) throw new Error('worker-unavailable');
-      if (registration.active) return registration;
-      let timer;
-      try {
-        return await Promise.race([
-          navigator.serviceWorker.ready,
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('worker-pending')), 10000); })
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
     function validPushPublicKey(value) {
       if (!/^B[A-Za-z0-9_-]{86}=?$/.test(value)) return false;
       const bytes = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
@@ -222,7 +205,7 @@
       };
       try {
         if ('serviceWorker' in navigator) {
-          const registration = await activeNotificationWorker();
+          const registration = await schoolTapReceiver.active();
           await registration.showNotification(title, options);
         } else {
           const notification = new Notification(title, options);
@@ -833,7 +816,6 @@
 
       useEffect(() => {
         localStorage.setItem('schooltap_lang_v2', lang);
-        schoolTapAlerts.saveLanguage(lang);
         document.documentElement.lang = lang;
         document.title = isEn
           ? 'SchoolTap™ | Smart Bus Bubble Alerts'
@@ -1031,6 +1013,38 @@
       const pushWork = useRef(Promise.resolve());
       const unlinkInProgress = useRef(false);
       const [sampleStatus, setSampleStatus] = useState('');
+      const [receiverLanguage, setReceiverLanguage] = useState('');
+      useEffect(() => {
+        if (!('serviceWorker' in navigator)) return;
+        let mounted = true;
+        let syncing = false;
+        const synchronize = async () => {
+          if (document.visibilityState === 'hidden' || syncing) return;
+          const preferred = localStorage.getItem('schooltap_preferred_lang');
+          if ((preferred === 'ko' || preferred === 'en') && preferred !== lang) {
+            setLang(preferred);
+            return;
+          }
+          syncing = true;
+          try {
+            const reply = await schoolTapReceiver.sync(lang);
+            if (mounted) setReceiverLanguage(reply.lang);
+          } catch {
+            if (mounted) setReceiverLanguage('failed');
+          } finally {
+            syncing = false;
+          }
+        };
+        synchronize();
+        document.addEventListener('visibilitychange', synchronize);
+        navigator.serviceWorker.addEventListener('controllerchange', synchronize);
+        return () => {
+          mounted = false;
+          document.removeEventListener('visibilitychange', synchronize);
+          navigator.serviceWorker.removeEventListener('controllerchange', synchronize);
+        };
+      }, [lang, pushRetry]);
+
       useEffect(() => {
         const refresh = () => {
           if ('Notification' in window) setNotifPermission(Notification.permission);
@@ -1151,7 +1165,7 @@
       );
 
       const requestSystemNotificationPermission = async () => {
-        if (!('Notification' in window)) {
+        if (!('Notification' in window) || !('serviceWorker' in navigator)) {
           setSampleStatus('unsupported');
           return;
         }
@@ -1165,11 +1179,8 @@
           }
           setSampleStatus('sending');
           setPushRetry(value => value + 1);
-          const sent = await dispatchSystemBannerNotification({
-            ...schoolTapAlerts.format({ event_type: 'TEST' }, lang),
-            tag: 'schooltap-test', role: deviceRole
-          });
-          setSampleStatus(sent ? 'sent' : 'failed');
+          await schoolTapReceiver.test(lang, deviceRole);
+          setSampleStatus('sent');
         } catch {
           setSampleStatus('failed');
         }
@@ -1211,6 +1222,16 @@
         return (
           <div role="status" aria-live="polite" className="space-y-1 text-[11px] text-slate-700">
             {sample[test] && <p>{sample[test][i]}</p>}
+            {'serviceWorker' in navigator && <p>
+              <strong>{isEn ? 'Phone push language · ' : '휴대폰 푸시 언어 · '}</strong>
+              {receiverLanguage === lang ? (isEn ? 'English' : '한국어')
+                : receiverLanguage === 'failed' ? (isEn ? 'Could not confirm.' : '연결을 확인하지 못했어요.')
+                : (isEn ? 'Checking…' : '확인 중…')}
+              {receiverLanguage === 'failed' && <button type="button" className="ml-2 underline font-bold"
+                onClick={() => { setReceiverLanguage(''); setPushRetry(value => value + 1); }}>
+                {isEn ? 'Retry' : '다시 연결'}
+              </button>}
+            </p>}
             <p><strong>{isEn ? 'Ride notifications · ' : '승하차 푸시 · '}</strong>{push[status][i]}</p>
             {isPausedToday && <p>{isEn ? 'Ride alerts are muted today.' : '오늘 승하차 알림이 일시정지되어 있습니다.'}</p>}
           </div>
@@ -1660,7 +1681,7 @@
         const client = sbClientRef.current;
         try {
           await pushWork.current;
-          const reg = await schoolTapWorker;
+          const reg = await schoolTapReceiver.registration;
           const sub = await reg?.pushManager?.getSubscription();
           if (sub) {
             await sub.unsubscribe();
@@ -1951,7 +1972,7 @@
           }
           setPushSyncStatus('syncing');
           try {
-            const reg = await activeNotificationWorker();
+            const reg = await schoolTapReceiver.active();
             let sub = await reg.pushManager.getSubscription();
             if (cancelled) return;
             if (!sub) {

@@ -16,12 +16,15 @@
   let pendingWrite = Promise.resolve();
 
   function saveLanguage(lang) {
-    if (lang !== 'ko' && lang !== 'en') return pendingWrite;
-    lastLanguage = lang;
+    if (lang !== 'ko' && lang !== 'en') return Promise.resolve(false);
     pendingWrite = pendingWrite.then(async () => {
       const cache = await caches.open(cacheName);
       await cache.put(languageKey, new Response(lang));
-    }).catch(() => {});
+      const stored = await cache.match(languageKey);
+      if (!stored || await stored.text() !== lang) return false;
+      lastLanguage = lang;
+      return true;
+    }).catch(() => false);
     return pendingWrite;
   }
 
@@ -128,6 +131,14 @@
     }
     if (student && kind !== 'UPDATE' && kind !== 'TEST') title += ' · ' + student;
     let body = bodyFor(kind, lang);
+    if (kind === 'APPROACHING_10M') {
+      const localizedStop = lang === 'ko'
+        ? ['stop_ko','stopKo','stop_name_ko','stopNameKo']
+        : ['stop_en','stopEn','stop_name_en','stopNameEn'];
+      const stop = field(parts, localizedStop) || field(parts, ['stop_name','stopName','bus_stop','busStop','stop'])
+        || bodyText.match(/^\s*\[([^\]\r\n]{1,90})\]\s*정류장(?:으로|에)\s*버스가\s*접근\s*중/)?.[1].trim();
+      if (stop) body += lang === 'ko' ? '\n정류장 · ' + stop : '\nStop · ' + stop;
+    }
     // Preserve a same-language custom announcement when the sender provides no ride event.
     if (kind === 'UPDATE' && !parts.some(p => kindFields.some(k => explicitKind(p[k]) === 'UPDATE')) && bodyText &&
         !/(?:updated|new (?:ride |bus )?update|업데이트|새 알림|새로운 알림)/i.test(bodyText)) {

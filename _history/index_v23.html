@@ -1,0 +1,4254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#FBBF24" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SchoolTap" />
+  <title>SchoolTap™ | Smart Bus Bubble Alerts</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/schooltap-180.png" />
+  <script>
+    // Capture the one-use event before the CDN scripts and React load.
+    const installState = { prompt: null, installed: false };
+    window.addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      installState.prompt = event;
+    });
+    window.addEventListener('appinstalled', () => {
+      installState.prompt = null;
+      installState.installed = true;
+    });
+
+    const launchParams = new URLSearchParams(location.search);
+    const launchRole = (launchParams.get('role') || launchParams.get('mode') || '').toLowerCase();
+    if (launchRole === 'parent' || launchRole === 'reader') {
+      document.querySelector('link[rel="manifest"]').href = './' + launchRole + '.webmanifest';
+    }
+    const schoolTapWorker = 'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => null)
+      : Promise.resolve(null);
+  </script>
+  <script src="./ride-messages.js"></script>
+  <script src="./ride-alerts.js"></script>
+  <!-- Leaflet Free OpenStreetMap CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- Tailwind CSS & Supabase & React CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background-color: #FFFDF7;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .bubble-pop-in {
+      animation: bubblePopSpring 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+    @keyframes bubblePopSpring {
+      0% { opacity: 0; transform: scale(0.45) translateY(30px); }
+      65% { opacity: 1; transform: scale(1.04) translateY(-4px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .float-bounce {
+      animation: floatBounceY 2.2s ease-in-out infinite;
+    }
+    @keyframes floatBounceY {
+      0%, 100% { transform: translateY(0px) rotate(-2deg); }
+      50% { transform: translateY(-7px) rotate(3deg); }
+    }
+    .tap-pulse {
+      animation: pulseRing 1.9s infinite;
+    }
+    @keyframes pulseRing {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { box-shadow: 0 0 0 24px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    .leaflet-container {
+      font-family: 'Pretendard', sans-serif;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    // Default Supabase Project URL & School ID
+    const DEFAULT_SUPABASE_URL = 'https://vhwdxgpnubmieytjuaaw.supabase.co';
+    const DEFAULT_SCHOOL_ID = 'SCH-001';
+
+    // Guardian relation options (real-time EN <-> KO translation)
+    const RELATION_OPTIONS = [
+      { key: 'MOM', ko: '엄마', en: 'Mom' },
+      { key: 'DAD', ko: '아빠', en: 'Dad' },
+      { key: 'GRAND', ko: '조부모님', en: 'Grandparent' },
+      { key: 'GUARDIAN', ko: '보호자', en: 'Guardian' }
+    ];
+
+    const normalizeRelKey = (val) => {
+      if (!val) return 'MOM';
+      const found = RELATION_OPTIONS.find(
+        (r) => r.key === val || r.ko === val || r.en.toLowerCase() === String(val).toLowerCase()
+      );
+      return found ? found.key : 'MOM';
+    };
+
+    const getRelLabel = (relKey, lang) => {
+      const found = RELATION_OPTIONS.find((r) => r.key === normalizeRelKey(relKey)) || RELATION_OPTIONS[0];
+      return lang === 'ko' ? found.ko : found.en;
+    };
+
+    // DB snake_case <-> App camelCase mappers
+    const mapStudentFromDb = (row) => ({
+      id: row.id,
+      schoolId: row.school_id || DEFAULT_SCHOOL_ID,
+      nameKo: row.name_ko || '',
+      nameEn: row.name_en || row.name_ko || '',
+      gradeKo: row.grade_ko || '신규 원생',
+      gradeEn: row.grade_en || 'New Student',
+      stopKo: row.stop_ko || '정문 앞 정류장',
+      stopEn: row.stop_en || row.stop_ko || 'Main Gate Stop',
+      routeId: row.route_id || 'BUS-01',
+      stopLat: typeof row.stop_lat === 'number' ? row.stop_lat : null,
+      stopLng: typeof row.stop_lng === 'number' ? row.stop_lng : null,
+      uid: row.nfc_uid || `UNASSIGNED-${String(row.id || '').slice(-4) || '0000'}`,
+      inviteCode: (row.invite_code || '').trim().toUpperCase(),
+      keyringHex: row.keyring_hex || '#F472B6',
+      avatarEmoji: row.avatar_emoji || '👧🏻',
+      activeSession: row.active_session || null,
+      lastTapMs: Number(row.last_tap_ms) || 0
+    });
+
+    const mapStudentToDb = (stu, schoolId = DEFAULT_SCHOOL_ID) => {
+      const cleanUid = (stu.uid || '').trim().toUpperCase();
+      const isUnassigned = !cleanUid || cleanUid.startsWith('UNASSIGNED-');
+      return {
+        id: stu.id,
+        school_id: stu.schoolId || schoolId,
+        name_ko: stu.nameKo,
+        name_en: stu.nameEn || stu.nameKo,
+        grade_ko: stu.gradeKo || '신규 원생',
+        grade_en: stu.gradeEn || 'New Student',
+        stop_ko: stu.stopKo || '정문 앞 정류장',
+        stop_en: stu.stopEn || stu.stopKo || 'Main Gate Stop',
+        route_id: stu.routeId || 'BUS-01',
+        stop_lat: typeof stu.stopLat === 'number' ? stu.stopLat : null,
+        stop_lng: typeof stu.stopLng === 'number' ? stu.stopLng : null,
+        nfc_uid: isUnassigned ? null : cleanUid,
+        invite_code: (stu.inviteCode || '').trim().toUpperCase(),
+        keyring_hex: stu.keyringHex || '#34D399',
+        avatar_emoji: stu.avatarEmoji || '🧑🏻',
+        active_session: stu.activeSession || null,
+        last_tap_ms: Number(stu.lastTapMs) || 0,
+        updated_at: new Date().toISOString()
+      };
+    };
+
+    const mapLogFromDb = (row) => ({
+      id: row.id,
+      schoolId: row.school_id || DEFAULT_SCHOOL_ID,
+      studentId: row.student_id,
+      studentName: row.student_name || '',
+      vehicleId: row.vehicle_id || 'BUS-01',
+      vehicleNameKo: row.vehicle_name_ko || '',
+      vehicleNameEn: row.vehicle_name_en || '',
+      type: row.event_type,
+      etaMinutes: row.eta_minutes || null,
+      distanceMeters: typeof row.distance_meters === 'number' ? row.distance_meters : null,
+      autoGps: Boolean(row.auto_gps),
+      stopKo: row.stop_ko || '',
+      stopEn: row.stop_en || '',
+      phraseIdx: Number(row.phrase_idx) || 0,
+      tagTimeMs: Number(row.tagged_at_ms) || (row.created_at ? new Date(row.created_at).getTime() : Date.now())
+    });
+
+    const mapLogToDb = (log, schoolId = DEFAULT_SCHOOL_ID) => ({
+      id: log.id,
+      school_id: log.schoolId || schoolId,
+      student_id: log.studentId,
+      student_name: log.studentName || '',
+      vehicle_id: log.vehicleId || 'BUS-01',
+      vehicle_name_ko: log.vehicleNameKo || '',
+      vehicle_name_en: log.vehicleNameEn || '',
+      event_type: log.type,
+      eta_minutes: log.etaMinutes || null,
+      distance_meters: typeof log.distanceMeters === 'number' ? log.distanceMeters : null,
+      auto_gps: Boolean(log.autoGps),
+      stop_ko: log.stopKo || '',
+      stop_en: log.stopEn || '',
+      phrase_idx: Number(log.phraseIdx) || 0,
+      tagged_at_ms: Number(log.tagTimeMs) || Date.now()
+    });
+
+    async function activeNotificationWorker() {
+      const registration = await schoolTapWorker;
+      if (!registration) throw new Error('worker-unavailable');
+      if (registration.active) return registration;
+      let timer;
+      try {
+        return await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('worker-pending')), 10000); })
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function validPushPublicKey(value) {
+      if (!/^B[A-Za-z0-9_-]{86}=?$/.test(value)) return false;
+      const bytes = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
+      return bytes.length === 65 && bytes.charCodeAt(0) === 4;
+    }
+
+    async function dispatchSystemBannerNotification({ title, body, tag, lang, role }) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+      const options = {
+        body, tag, lang, renotify: Boolean(tag), vibrate: [220, 100, 220],
+        icon: new URL('./icons/schooltap-192.png', location.href).href,
+        data: { url: role === 'PARENT' ? './?role=PARENT' : './' }
+      };
+      try {
+        if ('serviceWorker' in navigator) {
+          const registration = await activeNotificationWorker();
+          await registration.showNotification(title, options);
+        } else {
+          const notification = new Notification(title, options);
+          notification.onclick = () => { window.focus(); notification.close(); };
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    // Haversine distance calculation (meters)
+    const calcDistanceMeters = (lat1, lng1, lat2, lng2) => {
+      if (
+        typeof lat1 !== 'number' ||
+        typeof lng1 !== 'number' ||
+        typeof lat2 !== 'number' ||
+        typeof lng2 !== 'number'
+      ) {
+        return null;
+      }
+      const toRad = (deg) => (deg * Math.PI) / 180;
+      const R = 6371000;
+      const dLat = toRad(lat2 - lat1);
+      const dLng = toRad(lng2 - lng1);
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(lat1)) *
+          Math.cos(toRad(lat2)) *
+          Math.sin(dLng / 2) *
+          Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return Math.round(R * c);
+    };
+
+    const formatDistanceLabel = (meters, isEn) => {
+      if (meters === null || meters === undefined) {
+        return isEn ? 'No GPS Pin' : '좌표 미등록';
+      }
+      if (meters >= 1000) {
+        return `${(meters / 1000).toFixed(2)} km`;
+      }
+      return `${meters} m`;
+    };
+
+    // Safe clipboard copy helper
+    const safeCopyText = (text) => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    // Web Audio Chime & Speech Synthesis
+    const playChime = (type = 'BOARD', muted = false) => {
+      if (muted) return;
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const now = ctx.currentTime;
+        const tone = (freq, start, dur, wave = 'triangle', vol = 0.2) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = wave;
+          osc.frequency.setValueAtTime(freq, start);
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.exponentialRampToValueAtTime(vol, start + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(start);
+          osc.stop(start + dur + 0.02);
+        };
+        if (type === 'BOARD') {
+          tone(523.25, now, 0.1);
+          tone(659.25, now + 0.08, 0.1);
+          tone(783.99, now + 0.16, 0.12);
+          tone(1046.5, now + 0.25, 0.25, 'sine', 0.24);
+        } else if (type === 'ALIGHT') {
+          tone(659.25, now, 0.08, 'sine');
+          tone(783.99, now + 0.07, 0.08, 'sine');
+          tone(880.0, now + 0.14, 0.08, 'sine');
+          tone(1046.5, now + 0.21, 0.12);
+          tone(1318.5, now + 0.3, 0.26, 'sine', 0.24);
+        } else if (type === 'APPROACHING_10M') {
+          tone(587.33, now, 0.09);
+          tone(783.99, now + 0.09, 0.09);
+          tone(987.77, now + 0.18, 0.11, 'sine');
+          tone(1174.66, now + 0.28, 0.26, 'sine', 0.24);
+        } else {
+          tone(330, now, 0.12, 'sawtooth', 0.14);
+          tone(262, now + 0.13, 0.18, 'sawtooth', 0.14);
+        }
+      } catch (e) {}
+    };
+
+    const speakVoice = (text, lang = 'en', muted = false) => {
+      if (muted) return;
+      try {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(text);
+          utter.lang = lang === 'ko' ? 'ko-KR' : 'en-US';
+          utter.rate = 1.05;
+          window.speechSynthesis.speak(utter);
+        }
+      } catch (e) {}
+    };
+
+    // Bilingual 10-phrase cheerful bubble pools (EN & KO)
+    const QUOTES = {
+      BOARD: {
+        ko: [
+          { emoji: '🚌💨', title: '엄마! 저 방금 {vehicle}에 탔어요!', sub: '가방 키링 삑! 찍고 안전하게 앉았어요 💛' },
+          { emoji: '🎒✨', title: '출발 준비 끝! 방금 승차 확인됐어요!', sub: '{vehicle}에서 친구들이랑 인사하고 있어요 👋' },
+          { emoji: '🚀🌈', title: '스쿨탭 로켓 탑승 성공! 출발합니다!', sub: '오늘도 씩씩하게 잘 다녀올게요 🌟' },
+          { emoji: '🐥🎵', title: '삐약삐약! 저 버스에 안전하게 올라탔어요!', sub: '내릴 때도 잊지 않고 꼭 찍을게요 😉' },
+          { emoji: '🐻💛', title: '오늘도 안전벨트 찰칵! {vehicle} 탑승 완료!', sub: '기사님께 반갑게 인사하고 자리에 앉았어요 😊' },
+          { emoji: '🌻🚌', title: '기분 좋은 출발! 방금 버스에 잘 올라탔어요!', sub: '가방 키링이 예쁘게 삑! 하고 반겨줬어요 ✨' },
+          { emoji: '🍀🎈', title: '안전 승차 체크 완료! 지금 출발해요~', sub: '창밖 구경하면서 즐겁게 이동하고 있어요 🎶' },
+          { emoji: '🐰🌟', title: '깡총! {vehicle}에 무사히 탑승했습니다!', sub: '가방도 잘 챙기고 안전하게 자리에 앉았어요 💛' },
+          { emoji: '🎨🚌', title: '스쿨탭 체크인 완료! 오늘도 씩씩하게 출발!', sub: '도착해서 내릴 때도 야무지게 태그할게요 👍' },
+          { emoji: '🌈😊', title: '엄마 안심하세요! 저 방금 {vehicle} 탔어요!', sub: '친구들과 웃으며 안전하게 이동 중이에요 🚌💛' }
+        ],
+        en: [
+          { emoji: '🚌💨', title: 'Hopped on {vehicle}! See you later!', sub: 'Tapped my backpack charm & buckled up 💛' },
+          { emoji: '🎒✨', title: 'All aboard! Just tapped onto the bus!', sub: 'Saying hi to my friends on {vehicle} 👋' },
+          { emoji: '🚀🌈', title: 'SchoolTap rocket launched! Safely on board!', sub: 'Heading off with a big smile today 🌟' },
+          { emoji: '🐥🎵', title: 'Safely on the bus and seated!', sub: 'I will tap again when I hop off 😉' },
+          { emoji: '🐻💛', title: 'Buckled up! Just boarded {vehicle}!', sub: 'Said hello to the driver and found my seat 😊' },
+          { emoji: '🌻🚌', title: 'Happy ride ahead! Boarding confirmed!', sub: 'My backpack tag beeped loud and clear ✨' },
+          { emoji: '🍀🎈', title: 'Checked in safely! We are rolling now~', sub: 'Enjoying the window view on {vehicle} 🎶' },
+          { emoji: '🐰🌟', title: 'Hopped right onto {vehicle} safely!', sub: 'Backpack secured and ready for the trip 💛' },
+          { emoji: '🎨🚌', title: 'SchoolTap check-in done! Off we go!', sub: 'I will make sure to tap when I get off too 👍' },
+          { emoji: '🌈😊', title: 'All good! Just got on {vehicle}!', sub: 'Smiling with friends and riding safely 🚌💛' }
+        ]
+      },
+      ALIGHT: {
+        ko: [
+          { emoji: '🏫✨', title: '얏호! 무사히 도착해서 잘 내렸어요!', sub: '{vehicle}에서 반갑게 인사하고 하차 완료 🎉' },
+          { emoji: '🎒🎉', title: '안전 착륙 성공! 방금 버스에서 내렸어요!', sub: '가방도 잘 메고 키링도 야무지게 찍었어요 💛' },
+          { emoji: '🌈💛', title: '도착 완료! 오늘도 씩씩하게 잘 왔어요!', sub: '하차 시각이 정확히 기록되었어요 ✅' },
+          { emoji: '🐰🎀', title: '깡총! 버스에서 내려서 걸어가고 있어요!', sub: '안전하게 내렸으니 마음 놓으세요 😊' },
+          { emoji: '🌟👏', title: '하차 태그 삑! 오늘도 스스로 잘 해냈어요!', sub: '{vehicle}에서 안전하게 내려 이동 중이에요 💛' },
+          { emoji: '🏡🌷', title: '무사 도착! 방금 버스에서 내렸습니다!', sub: '가방 챙겨서 씩씩하게 발걸음을 옮겼어요 ✨' },
+          { emoji: '🧸💫', title: '안전하게 하차 완료! 걱정 놓으세요~', sub: '정확한 하차 확인 버블이 도착했어요 🎈' },
+          { emoji: '🐥🌻', title: '도착했어요! {vehicle}에서 잘 내렸습니다!', sub: '끝까지 안전하게 하차 태그까지 완료했어요 👏' },
+          { emoji: '🎈😊', title: '방금 하차 확인! 오늘도 즐거운 이동이었어요!', sub: '소지품도 잘 챙기고 안전하게 내렸어요 💛' },
+          { emoji: '🍀🏫', title: '하차 체크아웃 완료! 무사히 도착했어요!', sub: '언제나 안심할 수 있도록 정확히 알려드려요 ✅' }
+        ],
+        en: [
+          { emoji: '🏫✨', title: 'Woohoo! Made it safe and sound!', sub: 'Tapped off {vehicle} with a big smile 🎉' },
+          { emoji: '🎒🎉', title: 'Touchdown! Just hopped off the bus!', sub: 'Backpack on and charm tapped cleanly 💛' },
+          { emoji: '🌈💛', title: 'Safely arrived! Drop-off confirmed!', sub: 'Exact exit scan logged on {vehicle} ✅' },
+          { emoji: '🐰🎀', title: 'Hopped off the bus & heading inside!', sub: 'Rest easy—your rider is safely off 😊' },
+          { emoji: '🌟👏', title: 'Exit tap complete! Did it all by myself!', sub: 'Stepped off {vehicle} safely and heading in 💛' },
+          { emoji: '🏡🌷', title: 'Arrived safely! Just stepped off the bus!', sub: 'Got my backpack and walking safely now ✨' },
+          { emoji: '🧸💫', title: 'Safe drop-off logged! All clear~', sub: 'Your arrival bubble has just been delivered 🎈' },
+          { emoji: '🐥🌻', title: 'Made it! Safely off {vehicle}!', sub: 'Remembered my exit scan right on time 👏' },
+          { emoji: '🎈😊', title: 'Exit confirmed! Smooth ride today!', sub: 'All belongings packed and safely off the bus 💛' },
+          { emoji: '🍀🏫', title: 'Checked out safely! Arrived right on time!', sub: 'Keeping you posted every step of the way ✅' }
+        ]
+      },
+      APPROACHING_10M: {
+        ko: [
+          { emoji: '📍🚌', title: '엄마! 버스가 약 {eta}분 뒤에 [{stop}]에 도착해요!', sub: '슬슬 신발 신고 마중 나올 준비해 주세요 💛' },
+          { emoji: '⏰👟', title: '딩동! {vehicle} 도착 {eta}분 전 알림이에요!', sub: '곧 [{stop}] 정류장 모퉁이를 돌아요 ✨' },
+          { emoji: '💛🚏', title: '약 {eta}분 후 [{stop}] 정류장 도착 예정이에요!', sub: '여유 있게 나와 주시면 반갑게 만날 수 있어요 😊' },
+          { emoji: '🌤️🚌', title: '{vehicle}가 [{stop}] 쪽으로 다가오고 있어요!', sub: '도착까지 약 {eta}분 정도 남았어요 🎈' },
+          { emoji: '🎶⏰', title: '곧 만나요! [{stop}] 도착 약 {eta}분 전입니다!', sub: '안전하게 운행하며 정류장으로 이동 중이에요 💛' },
+          { emoji: '🐣📍', title: '삐약! 약 {eta}분 뒤면 [{stop}]에 도착해요!', sub: '정류장에서 반갑게 맞이해 주세요 🌟' },
+          { emoji: '🚌✨', title: '도착 알림! {vehicle}가 약 {eta}분 후 도착해요!', sub: '[{stop}] 정류장 부근으로 순조롭게 오고 있어요 👍' },
+          { emoji: '🌷👟', title: '마중 준비 시간! [{stop}]까지 약 {eta}분 남았어요!', sub: '곧 문이 열리고 씩씩하게 내릴 거예요 😊' },
+          { emoji: '🧭💛', title: '{vehicle} 접근 중! [{stop}] 도착 약 {eta}분 전!', sub: '늦지 않게 미리 알려드리는 안심 버블이에요 ✨' },
+          { emoji: '🌈🚏', title: '잠시 후 약 {eta}분 뒤 [{stop}] 정류장에 닿아요!', sub: '오늘도 안전하게 정류장까지 모셔다드려요 🚌' }
+        ],
+        en: [
+          { emoji: '📍🚌', title: 'Heads up! {vehicle} is ~{eta} mins from {stop}!', sub: 'Perfect time to head out to the bus stop 💛' },
+          { emoji: '⏰👟', title: 'Ding-dong! About {eta} minutes until {stop}!', sub: 'Grab your keys—the yellow bus is approaching ✨' },
+          { emoji: '💛🚏', title: 'Arriving at {stop} in roughly {eta} minutes!', sub: 'Heading your way smoothly and safely 😊' },
+          { emoji: '🌤️🚌', title: '{vehicle} is getting close to {stop}!', sub: 'Estimated arrival in about {eta} minutes 🎈' },
+          { emoji: '🎶⏰', title: 'See you soon! ~{eta} mins away from {stop}!', sub: 'Cruising safely toward your stop right now 💛' },
+          { emoji: '🐣📍', title: 'Almost there! About {eta} mins until {stop}!', sub: 'Ready to meet your rider at the stop 🌟' },
+          { emoji: '🚌✨', title: 'ETA Update: {vehicle} is ~{eta} mins out!', sub: 'Approaching the {stop} area right on schedule 👍' },
+          { emoji: '🌷👟', title: 'Time to head out! ~{eta} mins to {stop}!', sub: 'Your child will be hopping off shortly 😊' },
+          { emoji: '🧭💛', title: '{vehicle} approaching {stop} (~{eta} mins)!', sub: 'A friendly heads-up so you never have to rush ✨' },
+          { emoji: '🌈🚏', title: 'Just ~{eta} minutes until {vehicle} reaches {stop}!', sub: 'Bringing your rider home safely 🚌' }
+        ]
+      },
+      NO_ALIGHT_1H: {
+        ko: [
+          { emoji: '🏷️💭', title: '하차 태그를 깜빡한 것 같아요! 아이에게 확인해 보세요 😊', sub: '승차 후 1시간 동안 하차 기록이 없어요. 잘 도착했는지 가볍게 확인해 보시는 걸 권장드려요 💛' },
+          { emoji: '🎒✨', title: '하차 키링 태그가 누락된 것 같아요!', sub: '승차 후 1시간이 지났지만 하차 태그가 찍히지 않았어요. 아이에게 도착 여부를 확인해 보세요 😊' },
+          { emoji: '💛🚌', title: '앗, 내리면서 키링 찍는 걸 잊은 것 같아요!', sub: '탑승 후 1시간 동안 하차 기록이 확인되지 않았어요. 아이와 통화나 메시지로 확인해 보시는 걸 권장해요 🌷' },
+          { emoji: '🧸🔔', title: '하차 태그 미확인 안내 · 아이에게 확인해 보세요!', sub: '즐겁게 내리느라 태그를 깜빡했을 수 있어요. 잘 도착했는지 가볍게 확인해 주세요 💛' },
+          { emoji: '🌤️🏷️', title: '하차 기록이 아직 없어요 — 태그를 잊은 것 같아요!', sub: '승차 후 1시간이 경과했어요. 아이에게 무사히 도착했는지 확인해 보시는 걸 권장드립니다 😊' },
+          { emoji: '🐰💡', title: '키링 하차 태그가 찍히지 않았어요!', sub: '바쁘게 내리면서 태그를 놓친 것 같아요. 아이에게 잘 도착했는지 한 번 확인해 보세요 💛' },
+          { emoji: '🍀🚌', title: '안심 확인 안내 · 하차 태그가 누락되었어요!', sub: '탑승 후 1시간 동안 하차 기록이 없어요. 태그를 잊은 것 같으니 아이에게 확인해 보시는 걸 권장해요 ✨' },
+          { emoji: '🐥💬', title: '하차 태그를 깜빡하고 내린 것 같아요!', sub: '승차 후 1시간이 지나 알려드려요. 아이에게 잘 들어갔는지 가볍게 확인해 보세요 😊' },
+          { emoji: '🎈🏷️', title: '하차 미태그 안내 — 아이에게 도착을 확인해 보세요!', sub: '가방 키링이 스치지 않고 내린 것 같아요. 안전하게 도착했는지 확인해 보시는 걸 권장드려요 💛' },
+          { emoji: '🌷😊', title: '하차 태그가 아직 기록되지 않았어요!', sub: '승차 후 1시간이 지났어요. 내리면서 태그를 잊은 것 같으니 아이에게 확인해 보시길 권장해요 🚌' }
+        ],
+        en: [
+          { emoji: '🏷️💭', title: 'Looks like the exit tap was missed — please check with your child 😊', sub: 'No drop-off scan was recorded within 1 hour of boarding. We recommend checking in to confirm arrival 💛' },
+          { emoji: '🎒✨', title: 'Exit charm scan may have been forgotten!', sub: 'It has been 1 hour since boarding without an exit scan. Please check with your child when convenient 😊' },
+          { emoji: '💛🚌', title: 'Oops, looks like your child forgot to tap off!', sub: 'No drop-off scan logged 1 hour after boarding. We recommend a quick check-in with your child 🌷' },
+          { emoji: '🧸🔔', title: 'Missing Exit Scan Reminder · Check with your child!', sub: 'They may have hopped off in a hurry without tapping. A quick check-in is recommended 💛' },
+          { emoji: '🌤️🏷️', title: 'No exit scan yet — looks like the tap was missed!', sub: '1 hour has passed since boarding. We recommend checking with your child to make sure they arrived 😊' },
+          { emoji: '🐰💡', title: 'Backpack charm exit tap wasn’t recorded!', sub: 'Your child likely forgot to tap while getting off. Please check in with them when you can 💛' },
+          { emoji: '🍀🚌', title: 'Friendly Check-In · Exit scan appears missed!', sub: 'No drop-off log within 1 hour of boarding. We recommend confirming arrival with your child ✨' },
+          { emoji: '🐥💬', title: 'Looks like your rider forgot to tap on the way out!', sub: 'Sharing a gentle reminder after 1 hour — please check with your child to confirm arrival 😊' },
+          { emoji: '🎈🏷️', title: 'Exit Scan Missed — Please check in with your child!', sub: 'The charm may not have touched the reader on exit. We recommend verifying with your child 💛' },
+          { emoji: '🌷😊', title: 'Drop-off scan hasn’t been logged yet!', sub: 'It has been 1 hour since boarding. Your child may have forgotten to tap — please check with them 🚌' }
+        ]
+      }
+    };
+
+    const BUS_ROUTES = [
+      { id: 'BUS-01', nameKo: '1호차 노란버스', nameEn: 'Route #14 Yellow Bus' },
+      { id: 'BUS-02', nameKo: '2호차 메이플버스', nameEn: 'Route #22 Maple Bus' }
+    ];
+
+    // US & KR friendly default demo roster (displays Emma & Leo first in English!)
+    const INITIAL_STUDENTS = [
+      {
+        id: 'stu-1',
+        schoolId: DEFAULT_SCHOOL_ID,
+        nameKo: '김소이',
+        nameEn: 'Emma',
+        gradeKo: '초등 1학년',
+        gradeEn: '1st Grade',
+        stopKo: '보정동 카페거리 정류장',
+        stopEn: 'Oak Creek & Maple Ave',
+        routeId: 'BUS-01',
+        stopLat: null,
+        stopLng: null,
+        uid: '04:A1:22:9B',
+        inviteCode: 'EMMA-1004',
+        keyringHex: '#F472B6',
+        avatarEmoji: '👧🏻',
+        activeSession: null,
+        lastTapMs: 0
+      },
+      {
+        id: 'stu-2',
+        schoolId: DEFAULT_SCHOOL_ID,
+        nameKo: '윤태하',
+        nameEn: 'Leo',
+        gradeKo: '유치부 7세',
+        gradeEn: 'Kindergarten',
+        stopKo: '기흥구청 앞 정류장',
+        stopEn: 'Pinecrest Corner',
+        routeId: 'BUS-01',
+        stopLat: null,
+        stopLng: null,
+        uid: '04:B7:88:1C',
+        inviteCode: 'LEO-7788',
+        keyringHex: '#60A5FA',
+        avatarEmoji: '👦🏻',
+        activeSession: null,
+        lastTapMs: 0
+      }
+    ];
+
+    const INITIAL_CHECKLISTS = {
+      'stu-1': [
+        { id: 'c1', category: 'HOMEWORK', titleKo: '수학 익힘책 12쪽 풀어오기', titleEn: 'Math worksheet, page 12', done: false },
+        { id: 'c2', category: 'SUPPLIES', titleKo: '도서관 빌린 책 가방에 넣기', titleEn: 'Bring library book to return', done: false },
+        { id: 'c3', category: 'EVENT', titleKo: '현장체험학습 동의서 제출', titleEn: 'Return field trip permission slip', done: true }
+      ],
+      'stu-2': [
+        { id: 'c4', category: 'SUPPLIES', titleKo: '물감 세트 & 앞치마 챙기기', titleEn: 'Pack watercolor set & smock', done: false }
+      ]
+    };
+
+    const GEOFENCE_PRESETS = [
+      { id: 'WALK_50M', radiusM: 50, etaMins: 1, ko: '🚶 도보 50m (집앞 테스트)', en: '🚶 50m Walk Test' },
+      { id: 'ETA_5M', radiusM: 1200, etaMins: 5, ko: '🚌 1.2km (도착 5분전)', en: '🚌 1.2km (~5m ETA)' },
+      { id: 'ETA_10M', radiusM: 2500, etaMins: 10, ko: '🚌 2.5km (도착 10분전)', en: '🚌 2.5km (~10m ETA)' }
+    ];
+
+    // ========================================================================
+    // Live Bus Position & Route Trail Map Component (Leaflet + OpenStreetMap)
+    // ========================================================================
+    function LiveBusRouteMap({ busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn, onRefresh }) {
+      const mapContainerRef = useRef(null);
+      const mapInstanceRef = useRef(null);
+      const layerGroupRef = useRef(null);
+
+      const routeStatus = useMemo(() => {
+        if (!busLoc || typeof busLoc.lat !== 'number' || typeof busLoc.lng !== 'number') {
+          return {
+            kind: 'OFFLINE',
+            badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+            icon: '📡',
+            title: isEn ? 'Waiting for Bus GPS Signal' : '차량 단말기 GPS 대기 중',
+            desc: isEn
+              ? 'Live location appears automatically once the bus reader turns ON GPS.'
+              : '버스 단말기에서 [실제 GPS 켜기]가 활성화되면 실시간 위치와 이동 경로가 표시됩니다.'
+          };
+        }
+
+        const hasStop = typeof stopLat === 'number' && typeof stopLng === 'number';
+        const curDist = hasStop ? calcDistanceMeters(busLoc.lat, busLoc.lng, stopLat, stopLng) : null;
+        const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
+
+        let passedStop = false;
+        let minTrailDist = curDist;
+        if (hasStop && trail.length >= 2) {
+          trail.forEach((pt) => {
+            const d = calcDistanceMeters(pt.lat, pt.lng, stopLat, stopLng);
+            if (d !== null && (minTrailDist === null || d < minTrailDist)) {
+              minTrailDist = d;
+            }
+          });
+          const prevPt = trail[trail.length - 2];
+          const prevDist = calcDistanceMeters(prevPt.lat, prevPt.lng, stopLat, stopLng);
+          if (minTrailDist !== null && minTrailDist <= 90 && curDist !== null && prevDist !== null && curDist > prevDist + 25 && curDist > 120) {
+            passedStop = true;
+          }
+        }
+
+        const speed = Number(busLoc.speedKmh) || 0;
+        const ageSec = Math.max(0, Math.round((Date.now() - (Number(busLoc.updatedAt) || Date.now())) / 1000));
+
+        if (passedStop) {
+          return {
+            kind: 'PASSED',
+            badgeClass: 'bg-rose-50 text-rose-900 border-rose-300',
+            icon: '🚨',
+            title: isEn
+              ? `Bus Already Passed [${stopLabel}] (${formatDistanceLabel(curDist, true)} away)`
+              : `이미 [${stopLabel}] 정류장 부근을 지나갔습니다 (${formatDistanceLabel(curDist, false)} 멀어짐)`,
+            desc: isEn
+              ? `Trail shows the bus passed within ${minTrailDist}m of your stop and is moving away.`
+              : `이동 궤적상 정류장 ${minTrailDist}m 이내를 통과한 뒤 다음 방향으로 이동 중입니다.`
+          };
+        }
+
+        if (hasStop && curDist !== null && curDist <= 90) {
+          return {
+            kind: 'ARRIVED',
+            badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-300',
+            icon: '🚌✨',
+            title: isEn
+              ? `Bus is Right at [${stopLabel}] Now! (${curDist}m)`
+              : `지금 바로 [${stopLabel}] 정류장에 도착했습니다! (${curDist}m)`,
+            desc: isEn
+              ? 'Your child can board or exit right now.'
+              : '현재 정류장 바로 앞에 정차·진입 중입니다.'
+          };
+        }
+
+        if (hasStop && curDist !== null) {
+          const isDelayed = speed <= 4;
+          const estMins = Math.max(1, Math.round(curDist / (speed > 8 ? (speed * 1000) / 60 : 350)));
+          return {
+            kind: 'APPROACHING',
+            badgeClass: isDelayed
+              ? 'bg-amber-50 text-amber-950 border-amber-300'
+              : 'bg-sky-50 text-sky-950 border-sky-300',
+            icon: isDelayed ? '⏳' : '🚌💨',
+            title: isEn
+              ? `${isDelayed ? 'Delayed in Traffic · ' : ''}Not Passed Yet — ${formatDistanceLabel(curDist, true)} Away (~${estMins}m)`
+              : `${isDelayed ? '교통 정체 지연 · ' : ''}아직 지나가지 않았어요! (${formatDistanceLabel(curDist, false)} 전방 · 약 ${estMins}분 후 도착)`,
+            desc: isEn
+              ? `Speed: ${speed} km/h · Updated ${ageSec}s ago. Heading toward your stop.`
+              : `현재 속도 ${speed}km/h · ${ageSec}초 전 수신. 정류장 방향으로 이동 중입니다.`
+          };
+        }
+
+        return {
+          kind: 'MOVING',
+          badgeClass: 'bg-sky-50 text-sky-950 border-sky-300',
+          icon: '🚌',
+          title: isEn
+            ? `${vehicleLabel} Live Location (${speed} km/h)`
+            : `${vehicleLabel} 실시간 이동 중 (${speed} km/h)`,
+          desc: isEn
+            ? `Updated ${ageSec}s ago. Stop GPS pin not set yet.`
+            : `${ageSec}초 전 위치 수신됨 (정류장 좌표 등록 시 남은 거리·통과 여부가 자동 표시됩니다).`
+        };
+      }, [busLoc, stopLat, stopLng, stopLabel, vehicleLabel, isEn]);
+
+      useEffect(() => {
+        if (!mapContainerRef.current || !window.L) return;
+
+        if (!mapInstanceRef.current) {
+          const defaultLat = busLoc?.lat ?? stopLat ?? 37.2747;
+          const defaultLng = busLoc?.lng ?? stopLng ?? 127.115;
+          const map = window.L.map(mapContainerRef.current, {
+            zoomControl: true,
+            attributionControl: false
+          }).setView([defaultLat, defaultLng], 15);
+
+          window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+          }).addTo(map);
+
+          layerGroupRef.current = window.L.layerGroup().addTo(map);
+          mapInstanceRef.current = map;
+        }
+
+        const map = mapInstanceRef.current;
+        const group = layerGroupRef.current;
+        group.clearLayers();
+
+        const boundsPoints = [];
+
+        if (typeof stopLat === 'number' && typeof stopLng === 'number') {
+          const stopIcon = window.L.divIcon({
+            className: '',
+            html: `<div style="background:#4F46E5;color:#fff;font-weight:900;font-size:11px;padding:4px 8px;border-radius:999px;border:2px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,0.28);white-space:nowrap;">🚏 ${stopLabel}</div>`,
+            iconSize: [120, 28],
+            iconAnchor: [60, 14]
+          });
+          window.L.marker([stopLat, stopLng], { icon: stopIcon }).addTo(group);
+          window.L.circle([stopLat, stopLng], {
+            radius: 80,
+            color: '#6366F1',
+            fillColor: '#6366F1',
+            fillOpacity: 0.12,
+            weight: 1.5,
+            dashArray: '4 4'
+          }).addTo(group);
+          boundsPoints.push([stopLat, stopLng]);
+        }
+
+        if (busLoc && typeof busLoc.lat === 'number' && typeof busLoc.lng === 'number') {
+          const trail = Array.isArray(busLoc.trail) ? busLoc.trail : [];
+          const trailCoords = trail
+            .filter((pt) => typeof pt.lat === 'number' && typeof pt.lng === 'number')
+            .map((pt) => [pt.lat, pt.lng]);
+
+          if (trailCoords.length >= 2) {
+            window.L.polyline(trailCoords, {
+              color: '#F59E0B',
+              weight: 5,
+              opacity: 0.85,
+              dashArray: '8 6'
+            }).addTo(group);
+
+            trailCoords.slice(0, -1).forEach((pt, idx) => {
+              if (idx % 2 === 0) {
+                window.L.circleMarker(pt, {
+                  radius: 3.5,
+                  color: '#D97706',
+                  fillColor: '#FBBF24',
+                  fillOpacity: 0.9,
+                  weight: 1.5
+                }).addTo(group);
+              }
+            });
+          }
+
+          if (typeof stopLat === 'number' && typeof stopLng === 'number') {
+            window.L.polyline(
+              [
+                [busLoc.lat, busLoc.lng],
+                [stopLat, stopLng]
+              ],
+              {
+                color: '#10B981',
+                weight: 2.5,
+                opacity: 0.55,
+                dashArray: '4 8'
+              }
+            ).addTo(group);
+          }
+
+          const busIcon = window.L.divIcon({
+            className: '',
+            html: `<div style="background:#111827;color:#FBBF24;font-weight:900;font-size:12px;padding:5px 10px;border-radius:999px;border:2.5px solid #FBBF24;box-shadow:0 4px 14px rgba(0,0,0,0.35);white-space:nowrap;">🚌 ${vehicleLabel}</div>`,
+            iconSize: [125, 32],
+            iconAnchor: [62, 16]
+          });
+          window.L.marker([busLoc.lat, busLoc.lng], { icon: busIcon }).addTo(group);
+          boundsPoints.push([busLoc.lat, busLoc.lng]);
+        }
+
+        if (boundsPoints.length === 1) {
+          map.setView(boundsPoints[0], 16);
+        } else if (boundsPoints.length >= 2) {
+          map.fitBounds(boundsPoints, { padding: [42, 42], maxZoom: 16 });
+        }
+
+        setTimeout(() => {
+          try {
+            map.invalidateSize();
+          } catch (e) {}
+        }, 120);
+      }, [busLoc, stopLat, stopLng, stopLabel, vehicleLabel]);
+
+      useEffect(() => {
+        return () => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
+          }
+        };
+      }, []);
+
+      return (
+        <div className="bg-white rounded-3xl p-4 border-2 border-sky-200 shadow-xs space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <span>🗺️</span>
+              <span>
+                {isEn
+                  ? 'Live Bus Route & Stop Check'
+                  : '실시간 버스 위치 · 이동 경로 확인'}
+              </span>
+            </div>
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="px-2.5 py-1 rounded-xl bg-sky-100 hover:bg-sky-200 text-sky-900 text-[11px] font-black"
+              >
+                {isEn ? '↻ Refresh GPS' : '↻ 위치 새로고침'}
+              </button>
+            )}
+          </div>
+
+          <div className={`p-3 rounded-2xl border text-left space-y-1 ${routeStatus.badgeClass}`}>
+            <div className="text-xs font-black flex items-center gap-1.5">
+              <span>{routeStatus.icon}</span>
+              <span className="break-keep">{routeStatus.title}</span>
+            </div>
+            <p className="text-[11px] opacity-85 leading-snug break-keep">
+              {routeStatus.desc}
+            </p>
+          </div>
+
+          <div
+            ref={mapContainerRef}
+            className="w-full h-56 rounded-2xl overflow-hidden border border-slate-200 bg-slate-100"
+          />
+
+          <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 px-1">
+            <span>🚌 {isEn ? 'Current Bus' : '현재 버스 위치'}</span>
+            <span>┈ {isEn ? 'Recent Route Trail' : '지나온 이동 경로'}</span>
+            <span>🚏 {isEn ? 'Child Stop' : '우리 아이 정류장'}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const params = useMemo(() => new URLSearchParams(window.location.search), []);
+
+      // Device Role: PARENT | READER | ADMIN
+      const [deviceRole, setDeviceRole] = useState(() => {
+        const r = (params.get('role') || params.get('mode') || '').toUpperCase();
+        if (r === 'PARENT') return 'PARENT';
+        if (r === 'READER') return 'READER';
+        return 'ADMIN';
+      });
+
+      const schoolId = useMemo(() => {
+        const s = (params.get('schoolId') || '').trim().toUpperCase();
+        if (s) {
+          localStorage.setItem('schooltap_school_id', s);
+          return s;
+        }
+        return localStorage.getItem('schooltap_school_id') || DEFAULT_SCHOOL_ID;
+      }, [params]);
+
+      // Default language is English ('en'), with 1-tap toggle to Korean ('ko')
+      const [lang, setLang] = useState(() => {
+        const preferred = localStorage.getItem('schooltap_preferred_lang');
+        if (preferred === 'en' || preferred === 'ko') return preferred;
+        const pLang = params.get('lang');
+        if (pLang === 'ko' || pLang === 'en') {
+          localStorage.setItem('schooltap_lang_v2', pLang);
+          return pLang;
+        }
+        const saved = localStorage.getItem('schooltap_lang_v2');
+        return saved === 'ko' ? 'ko' : 'en';
+      });
+
+      const isEn = lang === 'en';
+      const chooseLanguage = (next) => {
+        localStorage.setItem('schooltap_preferred_lang', next);
+        setLang(next);
+      };
+
+      useEffect(() => {
+        const followLanguage = (event) => {
+          if (event.key === 'schooltap_preferred_lang' && (event.newValue === 'ko' || event.newValue === 'en')) {
+            setLang(event.newValue);
+          }
+        };
+        window.addEventListener('storage', followLanguage);
+        return () => window.removeEventListener('storage', followLanguage);
+      }, []);
+
+      useEffect(() => {
+        localStorage.setItem('schooltap_lang_v2', lang);
+        schoolTapAlerts.saveLanguage(lang);
+        document.documentElement.lang = lang;
+        document.title = isEn
+          ? 'SchoolTap™ | Smart Bus Bubble Alerts'
+          : 'SchoolTap™ | 통학 안심 버블 알림';
+      }, [lang, isEn]);
+
+      const sName = useCallback(
+        (stu) => {
+          if (!stu) return '';
+          if (isEn) return stu.nameEn || stu.nameKo || '';
+          return stu.nameKo || stu.nameEn || '';
+        },
+        [isEn]
+      );
+      const sStop = useCallback(
+        (stu) =>
+          !stu
+            ? isEn
+              ? 'Home Bus Stop'
+              : '집 앞 정류장'
+            : isEn
+            ? stu.stopEn || stu.stopKo
+            : stu.stopKo || stu.stopEn,
+        [isEn]
+      );
+      const sGrade = useCallback(
+        (stu) => (!stu ? '' : isEn ? stu.gradeEn || stu.gradeKo : stu.gradeKo || stu.gradeEn),
+        [isEn]
+      );
+
+      // Default tab on load: PARENT_PREVIEW so US school evaluators immediately see the interactive demo
+      const [adminTab, setAdminTab] = useState(() => {
+        const t = (params.get('tab') || '').toUpperCase();
+        if (t === 'OFFICE' || t === 'READER' || t === 'PARENT_PREVIEW') return t;
+        return 'PARENT_PREVIEW';
+      });
+      const [selectedBusRouteId, setSelectedBusRouteId] = useState('BUS-01');
+      const [runDirection, setRunDirection] = useState('DROPOFF');
+
+      const currentBusObj = useMemo(
+        () => BUS_ROUTES.find((r) => r.id === selectedBusRouteId) || BUS_ROUTES[0],
+        [selectedBusRouteId]
+      );
+      const vehicleName = isEn ? currentBusObj.nameEn : currentBusObj.nameKo;
+
+      // Supabase cloud connection info
+      const [sbUrl, setSbUrl] = useState(() => {
+        const u = params.get('sbUrl');
+        if (u) localStorage.setItem('schooltap_sb_url', u);
+        return u || localStorage.getItem('schooltap_sb_url') || DEFAULT_SUPABASE_URL;
+      });
+      const [sbKey, setSbKey] = useState(() => {
+        const k = params.get('sbKey');
+        if (k) localStorage.setItem('schooltap_sb_key', k);
+        return k || localStorage.getItem('schooltap_sb_key') || '';
+      });
+
+      const [cloudStatus, setCloudStatus] = useState('IDLE');
+      const [lastTxDebug, setLastTxDebug] = useState('');
+      const [cloudModalOpen, setCloudModalOpen] = useState(false);
+      const [publicSiteUrl, setPublicSiteUrl] = useState(() => localStorage.getItem('schooltap_public_url') || '');
+      const sbClientRef = useRef(null);
+      const seenLogIdsRef = useRef(new Set());
+      const localSelfActionIdsRef = useRef(new Set());
+
+      // Student roster (seeds with INITIAL_STUDENTS if empty so offline/GitHub demo works out of the box)
+      const [students, setStudents] = useState(() => {
+        try {
+          const saved = localStorage.getItem('schooltap_students_v9');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+          return INITIAL_STUDENTS;
+        } catch (e) {
+          return INITIAL_STUDENTS;
+        }
+      });
+
+      // Live bus locations & route trails
+      const [liveBusLocations, setLiveBusLocations] = useState({});
+      const busTrailRef = useRef({});
+      const lastBusDbPublishRef = useRef(0);
+
+      // Linked child invite codes on Parent phone
+      const [parentLinkedCodes, setParentLinkedCodes] = useState(() => {
+        const urlInvite = (params.get('invite') || '').trim().toUpperCase();
+        try {
+          const saved = JSON.parse(localStorage.getItem('schooltap_parent_codes') || '[]');
+          const base = Array.isArray(saved)
+            ? saved.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean)
+            : [];
+          if (urlInvite && !base.includes(urlInvite)) {
+            const merged = [urlInvite, ...base];
+            localStorage.setItem('schooltap_parent_codes', JSON.stringify(merged));
+            return merged;
+          }
+          return base;
+        } catch (e) {
+          return urlInvite ? [urlInvite] : [];
+        }
+      });
+
+      const [inviteCodeInput, setInviteCodeInput] = useState('');
+      const [linkingBusy, setLinkingBusy] = useState(false);
+      const [parentRelKey, setParentRelKey] = useState(() =>
+        normalizeRelKey(localStorage.getItem('schooltap_parent_rel'))
+      );
+      const parentRelationDisplay = useMemo(
+        () => getRelLabel(parentRelKey, lang),
+        [parentRelKey, lang]
+      );
+
+      const [addSiblingModalOpen, setAddSiblingModalOpen] = useState(false);
+      const [adminUnlockModalOpen, setAdminUnlockModalOpen] = useState(false);
+      const [adminPinInput, setAdminPinInput] = useState('');
+
+      const myLinkedChildren = useMemo(() => {
+        if (deviceRole === 'ADMIN') return students;
+        return students.filter((s) =>
+          parentLinkedCodes.includes((s.inviteCode || '').trim().toUpperCase())
+        );
+      }, [deviceRole, students, parentLinkedCodes]);
+
+      const [activeStudentId, setActiveStudentId] = useState('');
+
+      useEffect(() => {
+        if (myLinkedChildren.length > 0) {
+          if (!myLinkedChildren.some((s) => s.id === activeStudentId)) {
+            setActiveStudentId(myLinkedChildren[0].id);
+          }
+        } else {
+          setActiveStudentId('');
+        }
+      }, [myLinkedChildren, activeStudentId]);
+
+      const currentStudent = useMemo(
+        () => myLinkedChildren.find((s) => s.id === activeStudentId) || myLinkedChildren[0] || null,
+        [myLinkedChildren, activeStudentId]
+      );
+
+      const [logs, setLogs] = useState([]);
+      const [showAllLogs, setShowAllLogs] = useState(false);
+      const [parentTab, setParentTab] = useState('BUBBLES');
+      const [checklists, setChecklists] = useState(INITIAL_CHECKLISTS);
+      const [noticeInput, setNoticeInput] = useState('');
+
+      // Alert preferences + Mute Today + Push permission
+      const [approachingEnabled, setApproachingEnabled] = useState(true);
+      const [approachingMins, setApproachingMins] = useState(10);
+      const [tapBubbleEnabled, setTapBubbleEnabled] = useState(true);
+      const [soundMuted, setSoundMuted] = useState(false);
+
+      const getTodayKstDateStr = () => {
+        const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+        return kst.toISOString().slice(0, 10);
+      };
+      const [pausedDateStr, setPausedDateStr] = useState(() => localStorage.getItem('schooltap_paused_date') || '');
+      const isPausedToday = pausedDateStr === getTodayKstDateStr();
+
+      const [notifPermission, setNotifPermission] = useState(() =>
+        typeof window !== 'undefined' && 'Notification' in window
+          ? Notification.permission
+          : 'unsupported'
+      );
+      const isInstalled = () => installState.installed ||
+        window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+      const [isStandalonePwa, setIsStandalonePwa] = useState(isInstalled);
+      const [canInstall, setCanInstall] = useState(() => Boolean(installState.prompt));
+      const [promptOpen, setPromptOpen] = useState(false);
+      const [showInstallHelp, setShowInstallHelp] = useState(false);
+
+      useEffect(() => {
+        const syncInstallState = () => {
+          setIsStandalonePwa(isInstalled());
+          setCanInstall(Boolean(installState.prompt));
+          if (installState.prompt || isInstalled()) setShowInstallHelp(false);
+        };
+        window.addEventListener('beforeinstallprompt', syncInstallState);
+        window.addEventListener('appinstalled', syncInstallState);
+        syncInstallState();
+        return () => {
+          window.removeEventListener('beforeinstallprompt', syncInstallState);
+          window.removeEventListener('appinstalled', syncInstallState);
+        };
+      }, []);
+
+      const [vapidPubKey, setVapidPubKey] = useState(() => {
+        const shared = (params.get('vapid') || '').trim();
+        if (validPushPublicKey(shared)) localStorage.setItem('schooltap_vapid_pub', shared);
+        return localStorage.getItem('schooltap_vapid_pub') || '';
+      });
+      const [pushSyncStatus, setPushSyncStatus] = useState('idle');
+      const [pushRetry, setPushRetry] = useState(0);
+      const pushWork = useRef(Promise.resolve());
+      const unlinkInProgress = useRef(false);
+      const [sampleStatus, setSampleStatus] = useState('');
+      useEffect(() => {
+        const refresh = () => {
+          if ('Notification' in window) setNotifPermission(Notification.permission);
+        };
+        window.addEventListener('focus', refresh);
+        document.addEventListener('visibilitychange', refresh);
+        return () => {
+          window.removeEventListener('focus', refresh);
+          document.removeEventListener('visibilitychange', refresh);
+        };
+      }, []);
+
+      const [toast, setToast] = useState('');
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
+      }, []);
+
+      const [nfcScanning, setNfcScanning] = useState(false);
+      const [wakeLockActive, setWakeLockActive] = useState(false);
+      const [gpsTracking, setGpsTracking] = useState(false);
+      const [busCoords, setBusCoords] = useState(null);
+      const [autoPinEnabled, setAutoPinEnabled] = useState(true);
+      const [geofencePresetId, setGeofencePresetId] = useState('ETA_10M');
+      const gpsWatchIdRef = useRef(null);
+      const etaSentLockRef = useRef({});
+
+      const activePreset = useMemo(
+        () => GEOFENCE_PRESETS.find((p) => p.id === geofencePresetId) || GEOFENCE_PRESETS[2],
+        [geofencePresetId]
+      );
+
+      const [unregisteredUid, setUnregisteredUid] = useState('');
+      const [readerBanner, setReaderBanner] = useState(null);
+      const [popupLog, setPopupLog] = useState(null);
+
+      // Admin roster registration form
+      const [newStuName, setNewStuName] = useState('');
+      const [newStuStop, setNewStuStop] = useState('');
+      const [newStuUid, setNewStuUid] = useState('');
+      const [capturingUidForOffice, setCapturingUidForOffice] = useState(false);
+
+      // Admin edit modal
+      const [editingStudent, setEditingStudent] = useState(null);
+      const [editName, setEditName] = useState('');
+      const [editStop, setEditStop] = useState('');
+      const [editUid, setEditUid] = useState('');
+      const [editResetGps, setEditResetGps] = useState(false);
+      const [capturingUidForEdit, setCapturingUidForEdit] = useState(false);
+
+      useEffect(() => {
+        try {
+          localStorage.setItem('schooltap_students_v9', JSON.stringify(students));
+        } catch (e) {}
+      }, [students]);
+
+      const togglePauseToday = async () => {
+        const todayStr = getTodayKstDateStr();
+        const nextPausedDate = isPausedToday ? '' : todayStr;
+        setPausedDateStr(nextPausedDate);
+        if (nextPausedDate) {
+          localStorage.setItem('schooltap_paused_date', nextPausedDate);
+        } else {
+          localStorage.removeItem('schooltap_paused_date');
+        }
+
+        const client = sbClientRef.current;
+        if (client && parentLinkedCodes.length > 0) {
+          try {
+            await client
+              .from('schooltap_push_subscriptions')
+              .update({ paused_date: nextPausedDate || null, updated_at: new Date().toISOString() })
+              .eq('school_id', schoolId)
+              .in('invite_code', parentLinkedCodes);
+          } catch (e) {}
+        }
+
+        showToast(
+          nextPausedDate
+            ? isEn
+              ? '🔕 Paused all alerts for today. Resumes automatically tomorrow!'
+              : '🔕 오늘 하루 알림이 꺼졌습니다. 내일 자동으로 다시 켜집니다!'
+            : isEn
+            ? '🔔 Alerts resumed!'
+            : '🔔 오늘 알림이 다시 켜졌습니다!'
+        );
+      };
+
+      const formatTime = (ms) =>
+        new Date(ms).toLocaleTimeString(isEn ? 'en-US' : 'ko-KR', {
+          hour: isEn ? 'numeric' : '2-digit',
+          minute: '2-digit',
+          hour12: isEn
+        });
+
+      const resolveQuote = useCallback(
+        (log) => {
+          const list = (QUOTES[log.type] || QUOTES.BOARD)[lang] || QUOTES.BOARD.en;
+          const item = list[(log.phraseIdx || 0) % list.length];
+          const stopStr = isEn ? log.stopEn || 'Oak Creek Stop' : log.stopKo || '집 앞 정류장';
+          const etaStr = String(log.etaMinutes || 10);
+          const vName =
+            log.vehicleNameKo && !isEn
+              ? log.vehicleNameKo
+              : log.vehicleNameEn && isEn
+              ? log.vehicleNameEn
+              : vehicleName;
+          return {
+            emoji: item.emoji,
+            title: schoolTapAlerts.bodyFor(Object.hasOwn(QUOTES, log.type) ? log.type : 'UPDATE', lang, log.phraseIdx ?? 0),
+            sub: item.sub
+              .replace(/\{vehicle\}/g, vName)
+              .replace(/\{stop\}/g, stopStr)
+              .replace(/\{eta\}/g, etaStr)
+          };
+        },
+        [lang, isEn, vehicleName]
+      );
+
+      const requestSystemNotificationPermission = async () => {
+        if (!('Notification' in window)) {
+          setSampleStatus('unsupported');
+          return;
+        }
+        try {
+          const permission = Notification.permission === 'default'
+            ? await Notification.requestPermission() : Notification.permission;
+          setNotifPermission(permission);
+          if (permission !== 'granted') {
+            setSampleStatus(permission === 'denied' ? 'blocked' : 'dismissed');
+            return;
+          }
+          setSampleStatus('sending');
+          setPushRetry(value => value + 1);
+          const sent = await dispatchSystemBannerNotification({
+            ...schoolTapAlerts.format({ event_type: 'TEST' }, lang),
+            tag: 'schooltap-test', role: deviceRole
+          });
+          setSampleStatus(sent ? 'sent' : 'failed');
+        } catch {
+          setSampleStatus('failed');
+        }
+      };
+
+      const renderNotificationTest = () => (
+        <button type="button" onClick={requestSystemNotificationPermission} disabled={sampleStatus === 'sending'}
+          className="py-2 px-2.5 rounded-xl bg-slate-900 text-white text-[11px] font-black disabled:opacity-60">
+          {notifPermission === 'granted'
+            ? (isEn ? 'Send test notification' : '테스트 알림 보내기')
+            : (isEn ? 'Enable & test notifications' : '알림 허용·테스트')}
+        </button>
+      );
+
+      const renderNotificationStatus = () => {
+        const sample = {
+          unsupported: ['Open SchoolTap in a browser that supports notifications.', '알림을 지원하는 Chrome이나 설치한 스쿨탭에서 열어주세요.'],
+          blocked: ['Notifications are blocked. Allow notifications for SchoolTap in app or browser settings.', '알림이 차단됐습니다. 휴대폰의 스쿨탭 또는 Chrome 사이트 설정에서 알림을 허용해 주세요.'],
+          dismissed: ['Permission was not granted. Tap the button again and choose Allow.', '권한을 허용하지 않았습니다. 버튼을 다시 누르고 허용을 선택해 주세요.'],
+          sending: ['Sending to this phone…', '이 휴대폰에 테스트 알림을 보내는 중입니다.'],
+          sent: ['Test sent to this phone. Check the notification shade.', '휴대폰에 테스트 알림을 요청했습니다. 화면 상단을 내려 알림창을 확인해 주세요.'],
+          failed: ['Could not display a notification. Reopen SchoolTap and check app notification settings.', '알림을 표시하지 못했습니다. 스쿨탭을 다시 열고 휴대폰 앱 알림 설정을 확인해 주세요.']
+        };
+        const push = {
+          idle: ['Allow notifications to connect ride alerts.', '알림을 허용하면 승하차 푸시를 연결할 수 있어요.'],
+          child: ['Open the school’s parent link and link your child to receive ride alerts.', '실제 승하차 알림은 학교의 학부모 링크로 접속해 아이를 연결하면 받을 수 있어요.'],
+          cloud: ['Open the parent QR link with school cloud settings.', '학교 서버 연결이 필요합니다. 관리자 화면에서 발급한 학부모 QR 링크로 접속해 주세요.'],
+          key: ['The school’s Web Push public key is missing. Use an updated parent QR link.', '학교의 푸시 공개키가 없습니다. 관리자가 공개키를 저장한 뒤 새 학부모 QR 링크로 접속해 주세요.'],
+          syncing: ['Registering this phone with the school…', '학교 서버에 이 휴대폰을 등록하는 중입니다.'],
+          registered: ['This phone is registered for ride notifications.', '학교 서버에 이 휴대폰의 승하차 푸시가 등록됐습니다.'],
+          rejected: ['The school server did not save this subscription. Tap the test button to retry.', '학교 서버에 푸시 구독을 저장하지 못했습니다. 테스트 버튼을 눌러 다시 시도해 주세요.'],
+          unsupported: ['This browser does not support background push.', '이 브라우저에서는 앱을 닫은 뒤 푸시를 받을 수 없습니다.'],
+          failed: ['Could not register this phone for background push. Check the school’s public key and retry.', '휴대폰의 푸시 구독에 실패했습니다. 학교의 푸시 공개키를 확인하고 다시 시도해 주세요.']
+        };
+        const i = isEn ? 0 : 1;
+        const test = notifPermission === 'denied' ? 'blocked' : sampleStatus;
+        const status = notifPermission !== 'granted' ? 'idle'
+          : !parentLinkedCodes.length ? 'child' : !sbUrl || !sbKey ? 'cloud' : pushSyncStatus;
+        return (
+          <div role="status" aria-live="polite" className="space-y-1 text-[11px] text-slate-700">
+            {sample[test] && <p>{sample[test][i]}</p>}
+            <p><strong>{isEn ? 'Ride notifications · ' : '승하차 푸시 · '}</strong>{push[status][i]}</p>
+            {isPausedToday && <p>{isEn ? 'Ride alerts are muted today.' : '오늘 승하차 알림이 일시정지되어 있습니다.'}</p>}
+          </div>
+        );
+      };
+
+      const triggerPwaInstall = async () => {
+        const prompt = installState.prompt;
+        if (!prompt) {
+          setShowInstallHelp(true);
+          return;
+        }
+        installState.prompt = null;
+        setCanInstall(false);
+        setShowInstallHelp(false);
+        setPromptOpen(true);
+        try {
+          await prompt.prompt();
+          await prompt.userChoice;
+        } catch {
+          setShowInstallHelp(true);
+        } finally {
+          setPromptOpen(false);
+        }
+      };
+
+      const renderInstallButton = () => isStandalonePwa ? (
+        <span role="status" className="block py-2 px-2.5 rounded-xl bg-emerald-100 text-emerald-900 text-[11px] font-black text-center">
+          {isEn ? '✔ SchoolTap installed' : '✔ 스쿨탭 설치됨'}
+        </span>
+      ) : (
+        <button type="button" onClick={triggerPwaInstall} disabled={promptOpen}
+          className="py-2 px-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-black transition disabled:opacity-60">
+          {canInstall || promptOpen
+            ? (isEn ? 'Install SchoolTap' : '스쿨탭 설치')
+            : (isEn ? 'Home Screen options' : '홈 화면 추가 옵션')}
+        </button>
+      );
+
+      const renderInstallHelp = () => {
+        if (!showInstallHelp || isStandalonePwa || canInstall) return null;
+        const ua = navigator.userAgent;
+        const isAndroid = /Android/i.test(ua);
+        const isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        let help;
+        if (isIOS) {
+          help = isEn
+            ? 'Open this page in Safari. Tap Share → Add to Home Screen → Add.'
+            : 'Safari에서 이 페이지를 연 뒤, 공유 → 홈 화면에 추가 → 추가를 누르세요.';
+        } else if (isAndroid) {
+          help = isEn
+            ? 'Open this page in Chrome. Tap ⋮ → Add to Home screen → Install. In Samsung Internet, tap ☰ → Add page to → Home screen.'
+            : 'Chrome에서 ⋮ → 홈 화면에 추가 → 설치를 누르세요. 삼성 인터넷에서는 ☰ → 현재 페이지 추가 → 홈 화면을 선택하세요.';
+        } else {
+          help = isEn
+            ? 'In Chrome or Edge, use the install icon in the address bar or the app installation option in the browser menu.'
+            : 'Chrome이나 Edge에서 주소창의 설치 아이콘 또는 브라우저 메뉴의 앱 설치 항목을 선택하세요.';
+        }
+        const url = new URL(location.href);
+        const query = url.searchParams.toString();
+        const chromeIntent = 'intent://' + url.host + url.pathname + (query ? '?' + query : '') +
+          '#Intent;scheme=https;package=com.android.chrome;end';
+        return (
+          <div className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs text-amber-950 space-y-2">
+            <p role="status">{help}</p>
+            {isAndroid && url.protocol === 'https:' && (
+              <a className="inline-block rounded-lg bg-slate-900 px-3 py-2 font-bold text-white" href={chromeIntent}>
+                {isEn ? 'Open in Chrome' : 'Chrome에서 열기'}
+              </a>
+            )}
+          </div>
+        );
+      };
+
+      // ======================================================================
+      // Supabase CRUD & Live Bus GPS Helpers
+      // ======================================================================
+      const syncSingleStudentToDb = useCallback(
+        async (stuObj) => {
+          const client = sbClientRef.current;
+          if (!client || !stuObj) {
+            return false;
+          }
+          try {
+            const payload = mapStudentToDb(stuObj, schoolId);
+            const { error } = await client
+              .from('schooltap_students')
+              .upsert(payload, { onConflict: 'id' });
+            if (!error) {
+              setLastTxDebug(isEn ? '🟢 DB Synced' : '🟢 DB 저장 OK');
+              return true;
+            } else {
+              setLastTxDebug(`🔴 DB Err: ${error.message}`);
+              return false;
+            }
+          } catch (err) {
+            setLastTxDebug(`🔴 Net Err: ${err.message}`);
+            return false;
+          }
+        },
+        [schoolId, isEn]
+      );
+
+      const deleteStudentFromDb = useCallback(
+        async (stuId) => {
+          const client = sbClientRef.current;
+          if (!client || !stuId) return false;
+          try {
+            const { error } = await client
+              .from('schooltap_students')
+              .delete()
+              .eq('id', stuId);
+            if (!error) {
+              setLastTxDebug(isEn ? '🟢 Deleted in DB' : '🟢 DB 삭제 OK');
+              return true;
+            } else {
+              setLastTxDebug(`🔴 Del Err: ${error.message}`);
+              return false;
+            }
+          } catch (err) {
+            return false;
+          }
+        },
+        [isEn]
+      );
+
+      const insertRideLogToDb = useCallback(
+        async (logObj) => {
+          const client = sbClientRef.current;
+          if (!client || !logObj) {
+            setLastTxDebug(isEn ? '🟡 Local Demo Mode' : '🟡 로컬 데모 모드');
+            return;
+          }
+          localSelfActionIdsRef.current.add(logObj.id);
+          seenLogIdsRef.current.add(logObj.id);
+          try {
+            const payload = mapLogToDb(logObj, schoolId);
+            const { error } = await client
+              .from('schooltap_ride_logs')
+              .insert(payload);
+            if (!error) {
+              setLastTxDebug(isEn ? 'Ride saved · requesting push…' : '승하차 기록 저장 · 푸시 요청 중');
+              const { data, error: pushError } = await client.functions.invoke('send-schooltap-push', { body: { record: payload } });
+              if (pushError || data?.error || data?.ok === false || data?.success === false) {
+                setLastTxDebug(isEn ? 'Ride saved · push request failed' : '승하차 기록 저장 · 서버 푸시 요청 실패');
+              } else if (data?.sent === 0) {
+                setLastTxDebug(isEn ? 'Ride saved · no push sent' : '승하차 기록 저장 · 푸시 발송 0건');
+              } else {
+                setLastTxDebug(isEn ? 'Ride saved · push request accepted' : '승하차 기록 저장 · 푸시 요청 접수');
+              }
+            } else {
+              setLastTxDebug(`🔴 Log Err: ${error.message}`);
+            }
+          } catch (err) {
+            setLastTxDebug(`🔴 Net Err: ${err.message}`);
+          }
+        },
+        [schoolId, isEn]
+      );
+
+      const publishBusLocationToDb = useCallback(
+        async (routeId, coordsObj) => {
+          const client = sbClientRef.current;
+          if (!coordsObj) return;
+
+          const prevTrail = Array.isArray(busTrailRef.current[routeId])
+            ? busTrailRef.current[routeId]
+            : [];
+          const lastPt = prevTrail[prevTrail.length - 1];
+          const movedDist = lastPt
+            ? calcDistanceMeters(lastPt.lat, lastPt.lng, coordsObj.lat, coordsObj.lng)
+            : 999;
+
+          const nextTrail =
+            movedDist === null || movedDist >= 10
+              ? [...prevTrail.slice(-24), { lat: coordsObj.lat, lng: coordsObj.lng, t: Date.now() }]
+              : prevTrail;
+          busTrailRef.current[routeId] = nextTrail;
+
+          const locEntry = {
+            lat: coordsObj.lat,
+            lng: coordsObj.lng,
+            accuracy: coordsObj.accuracy || 0,
+            speedKmh: coordsObj.speedKmh || 0,
+            direction: runDirection,
+            updatedAt: Date.now(),
+            trail: nextTrail
+          };
+
+          setLiveBusLocations((prev) => ({
+            ...prev,
+            [routeId]: locEntry
+          }));
+
+          if (!client) return;
+
+          try {
+            const { data: schoolRow } = await client
+              .from('schooltap_schools')
+              .select('bus_locations')
+              .eq('id', schoolId)
+              .maybeSingle();
+
+            const existingMap =
+              schoolRow && schoolRow.bus_locations && typeof schoolRow.bus_locations === 'object'
+                ? schoolRow.bus_locations
+                : {};
+
+            await client
+              .from('schooltap_schools')
+              .update({
+                bus_locations: {
+                  ...existingMap,
+                  [routeId]: locEntry
+                }
+              })
+              .eq('id', schoolId);
+          } catch (e) {}
+        },
+        [schoolId, runDirection]
+      );
+
+      const refreshBusLocationsFromDb = useCallback(async () => {
+        const client = sbClientRef.current;
+        if (!client) return;
+        try {
+          const { data } = await client
+            .from('schooltap_schools')
+            .select('bus_locations')
+            .eq('id', schoolId)
+            .maybeSingle();
+          if (data && data.bus_locations && typeof data.bus_locations === 'object') {
+            setLiveBusLocations(data.bus_locations);
+          }
+        } catch (e) {}
+      }, [schoolId]);
+
+      const myLinkedIdsRef = useRef(new Set());
+      useEffect(() => {
+        myLinkedIdsRef.current = new Set(myLinkedChildren.map((c) => c.id));
+      }, [myLinkedChildren]);
+
+      const studentsRef = useRef(students);
+      useEffect(() => {
+        studentsRef.current = students;
+      }, [students]);
+
+      const showRideAlert = useCallback((log) => {
+        setPopupLog(log);
+        const targetKid = studentsRef.current.find((s) => s.id === log.studentId);
+        const notification = schoolTapAlerts.format({
+          ...log, nameEn: targetKid?.nameEn, nameKo: targetKid?.nameKo
+        }, lang);
+        dispatchSystemBannerNotification({ ...notification, tag: log.id, role: deviceRole });
+      }, [lang, deviceRole]);
+
+      const handleIncomingRideLog = useCallback(
+        (rawRow, isHistory = false) => {
+          if (!rawRow || !rawRow.id) return;
+          const incomingLog = rawRow.event_type ? mapLogFromDb(rawRow) : rawRow;
+          if (!incomingLog.type) return;
+
+          setLogs((prev) => {
+            if (prev.some((l) => l.id === incomingLog.id)) return prev;
+            return [incomingLog, ...prev].sort((a, b) => b.tagTimeMs - a.tagTimeMs);
+          });
+
+          if (seenLogIdsRef.current.has(incomingLog.id)) return;
+          seenLogIdsRef.current.add(incomingLog.id);
+
+          setStudents((prev) =>
+            prev.map((s) => {
+              if (s.id !== incomingLog.studentId) return s;
+              if (incomingLog.type === 'BOARD') {
+                return {
+                  ...s,
+                  activeSession: {
+                    boardTimeMs: incomingLog.tagTimeMs,
+                    vehicleId: incomingLog.vehicleId || 'BUS-01'
+                  }
+                };
+              }
+              if (incomingLog.type === 'ALIGHT') {
+                return { ...s, activeSession: null };
+              }
+              return s;
+            })
+          );
+
+          const isShowingParentScreen =
+            deviceRole === 'PARENT' || (deviceRole === 'ADMIN' && adminTab === 'PARENT_PREVIEW');
+
+          if (
+            !isHistory &&
+            !localSelfActionIdsRef.current.has(incomingLog.id) &&
+            isShowingParentScreen &&
+            myLinkedIdsRef.current.has(incomingLog.studentId)
+          ) {
+            setActiveStudentId(incomingLog.studentId);
+            const allowPopup = isPausedToday
+              ? false
+              : incomingLog.type === 'NO_ALIGHT_1H'
+              ? true
+              : incomingLog.type === 'APPROACHING_10M'
+              ? approachingEnabled
+              : tapBubbleEnabled;
+            if (allowPopup) {
+              if (incomingLog.type !== 'NO_ALIGHT_1H') {
+                playChime(incomingLog.type, soundMuted);
+              }
+              showRideAlert(incomingLog);
+            }
+          }
+        },
+        [
+          deviceRole,
+          adminTab,
+          isPausedToday,
+          approachingEnabled,
+          tapBubbleEnabled,
+          soundMuted,
+          showRideAlert
+        ]
+      );
+
+      const fetchFreshStudentsFromDb = useCallback(
+        async (clientInstance, codesFilter = null) => {
+          const client = clientInstance || sbClientRef.current;
+          if (!client) return null;
+
+          if (Array.isArray(codesFilter) && codesFilter.length > 0) {
+            const upperCodes = codesFilter.map((c) => c.trim().toUpperCase());
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .in('invite_code', upperCodes);
+            if (error) throw error;
+            const mapped = (data || []).map(mapStudentFromDb);
+            myLinkedIdsRef.current = new Set(mapped.map((m) => m.id));
+            setStudents((prev) => {
+              const otherCached = prev.filter(
+                (p) => !upperCodes.includes((p.inviteCode || '').trim().toUpperCase())
+              );
+              return [...mapped, ...otherCached];
+            });
+            return mapped;
+          } else {
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .eq('school_id', schoolId)
+              .order('id', { ascending: true });
+            if (error) throw error;
+            const mapped = (data || []).map(mapStudentFromDb);
+            if (mapped.length > 0) setStudents(mapped);
+            return mapped;
+          }
+        },
+        [schoolId]
+      );
+
+      const handleConnectChildByCode = async (rawCode, relKeyArg) => {
+        const clean = (rawCode || '').trim().toUpperCase();
+        if (!clean) {
+          showToast(
+            isEn
+              ? 'Please enter an invite code! (e.g., EMMA-1004)'
+              : '초대코드를 입력해 주세요! (예: EMMA-1004)'
+          );
+          return false;
+        }
+
+        const client = sbClientRef.current;
+        let matched = null;
+
+        if (client) {
+          setLinkingBusy(true);
+          try {
+            const { data, error } = await client
+              .from('schooltap_students')
+              .select('*')
+              .ilike('invite_code', clean)
+              .maybeSingle();
+            if (!error && data) {
+              matched = mapStudentFromDb(data);
+              myLinkedIdsRef.current.add(matched.id);
+              setStudents((prev) => {
+                const filtered = prev.filter((item) => item.id !== matched.id);
+                return [matched, ...filtered];
+              });
+              const { data: kidLogs } = await client
+                .from('schooltap_ride_logs')
+                .select('*')
+                .eq('student_id', matched.id)
+                .order('tagged_at_ms', { ascending: false })
+                .limit(30);
+              if (Array.isArray(kidLogs)) {
+                kidLogs.forEach((r) => handleIncomingRideLog(r, true));
+              }
+            }
+          } catch (e) {}
+          setLinkingBusy(false);
+        }
+
+        if (!matched) {
+          matched =
+            students.find((s) => (s.inviteCode || '').trim().toUpperCase() === clean) || null;
+        }
+
+        if (!matched) {
+          playChime('ERROR', soundMuted);
+          showToast(
+            isEn
+              ? '❌ Invalid invite code. Try EMMA-1004 or LEO-7788!'
+              : '❌ 존재하지 않는 초대코드입니다. (예: EMMA-1004)'
+          );
+          return false;
+        }
+
+        const nextCodes = parentLinkedCodes.includes(clean)
+          ? parentLinkedCodes
+          : [...parentLinkedCodes, clean];
+        setParentLinkedCodes(nextCodes);
+        localStorage.setItem('schooltap_parent_codes', JSON.stringify(nextCodes));
+        const finalRelKey = normalizeRelKey(relKeyArg || parentRelKey);
+        setParentRelKey(finalRelKey);
+        localStorage.setItem('schooltap_parent_rel', finalRelKey);
+
+        myLinkedIdsRef.current.add(matched.id);
+        setActiveStudentId(matched.id);
+        setInviteCodeInput('');
+        setAddSiblingModalOpen(false);
+        playChime('BOARD', soundMuted);
+        const relTxt = getRelLabel(finalRelKey, lang);
+        showToast(
+          isEn
+            ? `💛 Linked as ${sName(matched)}'s ${relTxt}!`
+            : `💛 [${sName(matched)}] 어린이의 ${relTxt} 휴대폰으로 연결되었습니다!`
+        );
+
+        return true;
+      };
+
+      const handleDisconnectParent = async () => {
+        if (unlinkInProgress.current) return;
+        unlinkInProgress.current = true;
+        const client = sbClientRef.current;
+        try {
+          await pushWork.current;
+          const reg = await schoolTapWorker;
+          const sub = await reg?.pushManager?.getSubscription();
+          if (sub) {
+            await sub.unsubscribe();
+            if (await reg.pushManager.getSubscription()) throw new Error('still-subscribed');
+            if (client) {
+              await client.from('schooltap_push_subscriptions').delete()
+                .eq('school_id', schoolId).eq('endpoint', sub.endpoint);
+            }
+          }
+        } catch {
+          showToast(isEn ? 'Could not finish unlinking push. Reconnect and try again.' : '푸시 연결 해제를 마치지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
+          unlinkInProgress.current = false;
+          return;
+        }
+        setParentLinkedCodes([]);
+        localStorage.removeItem('schooltap_parent_codes');
+        localStorage.removeItem('schooltap_push_sub');
+        setPopupLog(null);
+        setPushSyncStatus('idle');
+        unlinkInProgress.current = false;
+
+        if (client) {
+          try {
+            await fetchFreshStudentsFromDb(client, null);
+          } catch (e) {}
+        }
+
+        showToast(
+          isEn
+            ? 'Unlinked. Enter a new invite code to connect another student.'
+            : '연결이 해제되었습니다. 새 초대코드를 입력해 주세요.'
+        );
+      };
+
+      // ======================================================================
+      // Supabase Realtime Bootstrap
+      // ======================================================================
+      const linkedCodesKey = useMemo(() => parentLinkedCodes.slice().sort().join(','), [parentLinkedCodes]);
+
+      useEffect(() => {
+        if (!sbUrl || !sbKey || !window.supabase) {
+          setCloudStatus('IDLE');
+          sbClientRef.current = null;
+          return;
+        }
+        setCloudStatus('CONNECTING');
+        const client = window.supabase.createClient(sbUrl, sbKey);
+        sbClientRef.current = client;
+
+        let active = true;
+
+        const bootstrapData = async () => {
+          try {
+            const { data: schoolData } = await client
+              .from('schooltap_schools')
+              .select('bus_locations')
+              .eq('id', schoolId)
+              .maybeSingle();
+            if (active && schoolData?.bus_locations) {
+              setLiveBusLocations(schoolData.bus_locations);
+            }
+
+            if (deviceRole === 'PARENT') {
+              const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
+              if (codes.length === 0) {
+                const { data: previewRows, error: pingErr } = await client
+                  .from('schooltap_students')
+                  .select('*')
+                  .eq('school_id', schoolId)
+                  .order('id', { ascending: true })
+                  .limit(20);
+                if (!active) return;
+                if (pingErr) {
+                  setCloudStatus('ERROR');
+                } else {
+                  setCloudStatus('CONNECTED');
+                  if (Array.isArray(previewRows) && previewRows.length > 0) {
+                    setStudents(previewRows.map(mapStudentFromDb));
+                  }
+                }
+                return;
+              }
+
+              const { data: stuRows, error: stuErr } = await client
+                .from('schooltap_students')
+                .select('*')
+                .in('invite_code', codes);
+
+              if (!active) return;
+              if (stuErr) {
+                setCloudStatus('ERROR');
+                return;
+              }
+
+              setCloudStatus('CONNECTED');
+              const mappedKids = (stuRows || []).map(mapStudentFromDb);
+              if (mappedKids.length > 0) {
+                myLinkedIdsRef.current = new Set(mappedKids.map((k) => k.id));
+                setStudents(mappedKids);
+
+                const kidIds = mappedKids.map((k) => k.id);
+                const { data: logRows } = await client
+                  .from('schooltap_ride_logs')
+                  .select('*')
+                  .in('student_id', kidIds)
+                  .order('tagged_at_ms', { ascending: false })
+                  .limit(30);
+
+                if (active && Array.isArray(logRows)) {
+                  logRows.forEach((r) => handleIncomingRideLog(r, true));
+                }
+              }
+            } else {
+              const { data: stuRows, error: stuErr } = await client
+                .from('schooltap_students')
+                .select('*')
+                .eq('school_id', schoolId)
+                .order('id', { ascending: true });
+
+              if (!active) return;
+              if (stuErr) {
+                setCloudStatus('ERROR');
+                return;
+              }
+
+              setCloudStatus('CONNECTED');
+              if (Array.isArray(stuRows) && stuRows.length > 0) {
+                setStudents(stuRows.map(mapStudentFromDb));
+              } else if (Array.isArray(stuRows) && stuRows.length === 0) {
+                const seedRows = INITIAL_STUDENTS.map((s) => mapStudentToDb(s, schoolId));
+                await client.from('schooltap_students').upsert(seedRows, { onConflict: 'id' });
+                if (active) setStudents(INITIAL_STUDENTS);
+              }
+
+              const { data: logRows } = await client
+                .from('schooltap_ride_logs')
+                .select('*')
+                .eq('school_id', schoolId)
+                .order('tagged_at_ms', { ascending: false })
+                .limit(30);
+
+              if (active && Array.isArray(logRows)) {
+                logRows.forEach((r) => handleIncomingRideLog(r, true));
+              }
+            }
+          } catch (e) {
+            if (active) setCloudStatus('ERROR');
+          }
+        };
+
+        bootstrapData();
+
+        const channel = client.channel(`schooltap-norm-${deviceRole}-${schoolId}-${Date.now()}`);
+
+        channel.on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'schooltap_schools',
+            filter: `id=eq.${schoolId}`
+          },
+          (chg) => {
+            if (!active || !chg?.new?.bus_locations) return;
+            setLiveBusLocations(chg.new.bus_locations);
+          }
+        );
+
+        if (deviceRole === 'PARENT') {
+          const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
+          if (codes.length > 0) {
+            channel.on(
+              'postgres_changes',
+              { event: 'INSERT', schema: 'public', table: 'schooltap_ride_logs' },
+              (chg) => {
+                if (!active || !chg?.new) return;
+                if (myLinkedIdsRef.current.has(chg.new.student_id)) {
+                  handleIncomingRideLog(chg.new, false);
+                }
+              }
+            );
+            channel.on(
+              'postgres_changes',
+              { event: 'UPDATE', schema: 'public', table: 'schooltap_students' },
+              (chg) => {
+                if (!active || !chg?.new) return;
+                if (myLinkedIdsRef.current.has(chg.new.id)) {
+                  const updatedKid = mapStudentFromDb(chg.new);
+                  setStudents((prev) =>
+                    prev.map((s) => (s.id === updatedKid.id ? updatedKid : s))
+                  );
+                }
+              }
+            );
+            channel.on(
+              'postgres_changes',
+              { event: 'DELETE', schema: 'public', table: 'schooltap_students' },
+              (chg) => {
+                if (!active || !chg?.old?.id) return;
+                if (myLinkedIdsRef.current.has(chg.old.id)) {
+                  myLinkedIdsRef.current.delete(chg.old.id);
+                  setStudents((prev) => prev.filter((s) => s.id !== chg.old.id));
+                }
+              }
+            );
+          } else {
+            channel.on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'schooltap_students',
+                filter: `school_id=eq.${schoolId}`
+              },
+              () => {
+                if (active) bootstrapData();
+              }
+            );
+          }
+        } else {
+          channel.on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'schooltap_students',
+              filter: `school_id=eq.${schoolId}`
+            },
+            (chg) => {
+              if (!active) return;
+              if (chg.eventType === 'DELETE' && chg.old?.id) {
+                setStudents((prev) => prev.filter((s) => s.id !== chg.old.id));
+              } else if (chg.new?.id) {
+                const mapped = mapStudentFromDb(chg.new);
+                setStudents((prev) => {
+                  const exists = prev.some((s) => s.id === mapped.id);
+                  return exists
+                    ? prev.map((s) => (s.id === mapped.id ? mapped : s))
+                    : [...prev, mapped];
+                });
+              }
+            }
+          );
+          channel.on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'schooltap_ride_logs',
+              filter: `school_id=eq.${schoolId}`
+            },
+            (chg) => {
+              if (!active || !chg?.new) return;
+              handleIncomingRideLog(chg.new, false);
+            }
+          );
+        }
+
+        channel.subscribe((status) => {
+          if (!active) return;
+          if (status === 'SUBSCRIBED') {
+            setCloudStatus('CONNECTED');
+          }
+        });
+
+        const handleVisibilitySync = async () => {
+          if (document.visibilityState === 'visible') {
+            bootstrapData();
+          }
+        };
+        document.addEventListener('visibilitychange', handleVisibilitySync);
+
+        return () => {
+          active = false;
+          document.removeEventListener('visibilitychange', handleVisibilitySync);
+          client.removeChannel(channel);
+        };
+      }, [sbUrl, sbKey, deviceRole, schoolId, linkedCodesKey, handleIncomingRideLog]);
+
+      useEffect(() => {
+        let cancelled = false;
+        const sync = async () => {
+          if (cancelled || unlinkInProgress.current || notifPermission !== 'granted' || deviceRole === 'READER' || !parentLinkedCodes.length) return;
+          const client = sbClientRef.current;
+          if (!client) { setPushSyncStatus('cloud'); return; }
+          if (!('PushManager' in window) || !('serviceWorker' in navigator)) {
+            setPushSyncStatus('unsupported'); return;
+          }
+          setPushSyncStatus('syncing');
+          try {
+            const reg = await activeNotificationWorker();
+            let sub = await reg.pushManager.getSubscription();
+            if (cancelled) return;
+            if (!sub) {
+              if (!validPushPublicKey(vapidPubKey)) { setPushSyncStatus('key'); return; }
+              const raw = atob(vapidPubKey.replace(/-/g, '+').replace(/_/g, '/'));
+              sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: Uint8Array.from(raw, char => char.charCodeAt(0))
+              });
+            }
+            if (cancelled) return;
+            const json = sub.toJSON();
+            const rows = parentLinkedCodes.map(code => ({
+              id: `sub-${schoolId}-${code}-${sub.endpoint.slice(-16)}`,
+              school_id: schoolId, invite_code: code, endpoint: sub.endpoint, subscription_json: json,
+              paused_date: isPausedToday ? getTodayKstDateStr() : null, updated_at: new Date().toISOString()
+            }));
+            const { error } = await client.from('schooltap_push_subscriptions').upsert(rows, { onConflict: 'id' });
+            if (!cancelled) setPushSyncStatus(error ? 'rejected' : 'registered');
+          } catch {
+            if (!cancelled) setPushSyncStatus('failed');
+          }
+        };
+        pushWork.current = pushWork.current.then(sync);
+        return () => { cancelled = true; };
+      }, [notifPermission, deviceRole, schoolId, parentLinkedCodes, sbUrl, sbKey, vapidPubKey, isPausedToday, pushRetry]);
+
+      // Approaching ETA Alert Helper
+      const sendApproachingAlert = useCallback(
+        (stu, customEtaMins, autoTriggered = false, distMeters = null, triggerPopup = false) => {
+          const target = stu || currentStudent || students[0];
+          if (!target) return;
+          const nowMs = Date.now();
+          const etaVal = customEtaMins || activePreset.etaMins || approachingMins;
+          const etaLog = {
+            id: `eta-${target.id}-${nowMs}`,
+            schoolId,
+            studentId: target.id,
+            studentName: isEn ? target.nameEn : target.nameKo,
+            vehicleId: currentBusObj.id,
+            vehicleNameKo: currentBusObj.nameKo,
+            vehicleNameEn: currentBusObj.nameEn,
+            type: 'APPROACHING_10M',
+            etaMinutes: etaVal,
+            distanceMeters: distMeters,
+            autoGps: autoTriggered,
+            stopKo: target.stopKo,
+            stopEn: target.stopEn,
+            tagTimeMs: nowMs,
+            phraseIdx: schoolTapAlerts.randomIndex('APPROACHING_10M', lang)
+          };
+          etaSentLockRef.current[target.id] = true;
+          setLogs((prev) => [etaLog, ...prev]);
+          insertRideLogToDb(etaLog);
+          playChime('APPROACHING_10M', soundMuted);
+
+          setReaderBanner({
+            type: 'ETA_SENT',
+            student: target,
+            etaMins: etaVal,
+            distMeters,
+            timeMs: nowMs
+          });
+
+          if (triggerPopup && !isPausedToday && approachingEnabled) {
+            showRideAlert(etaLog);
+          }
+
+          showToast(
+            isEn
+              ? `📍 ${autoTriggered ? '[Auto GPS] ' : ''}Sent ~${etaVal}m ETA alert for ${sName(target)}!`
+              : `📍 ${autoTriggered ? '[GPS 반경진입 자동] ' : ''}[${sName(target)}] 학부모님께 도착 ${etaVal}분 전 알림 발송!`
+          );
+        },
+        [
+          currentStudent,
+          students,
+          activePreset,
+          lang,
+          approachingEnabled,
+          showRideAlert,
+          approachingMins,
+          schoolId,
+          currentBusObj,
+          insertRideLogToDb,
+          soundMuted,
+          isEn,
+          sName,
+          isPausedToday,
+          showToast
+        ]
+      );
+
+      // 1-Hour No-Alight Reminder Helper
+      const noAlightSentLockRef = useRef({});
+
+      const sendNoAlightAlert = useCallback(
+        (stu, isTest = false, triggerPopup = false) => {
+          const target = stu || currentStudent || students[0];
+          if (!target) return;
+          const nowMs = Date.now();
+          const boardSessionId = target.activeSession?.boardTimeMs || nowMs;
+          const lockKey = `${target.id}-${boardSessionId}`;
+          if (!isTest && noAlightSentLockRef.current[lockKey]) return;
+
+          noAlightSentLockRef.current[lockKey] = true;
+          const alertLog = {
+            id: `noalight-${target.id}-${nowMs}`,
+            schoolId,
+            studentId: target.id,
+            studentName: isEn ? target.nameEn : target.nameKo,
+            vehicleId: target.activeSession?.vehicleId || currentBusObj.id,
+            vehicleNameKo: currentBusObj.nameKo,
+            vehicleNameEn: currentBusObj.nameEn,
+            type: 'NO_ALIGHT_1H',
+            stopKo: target.stopKo,
+            stopEn: target.stopEn,
+            tagTimeMs: nowMs,
+            phraseIdx: schoolTapAlerts.randomIndex('NO_ALIGHT_1H', lang)
+          };
+          setLogs((prev) => [alertLog, ...prev]);
+          insertRideLogToDb(alertLog);
+
+          setReaderBanner({
+            type: 'NO_ALIGHT_1H',
+            student: target,
+            timeMs: nowMs
+          });
+
+          if (triggerPopup && !isPausedToday) {
+            showRideAlert(alertLog);
+          }
+
+          showToast(
+            isEn
+              ? `🏷️ Sent gentle 1h exit-tag reminder for ${sName(target)}.`
+              : `🏷️ [${sName(target)}] 학부모님께 하차 태그 확인 안내 버블을 보냈습니다.`
+          );
+        },
+        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, lang, isEn, sName, isPausedToday, showRideAlert, showToast]
+      );
+
+      useEffect(() => {
+        const ONE_HOUR_MS = 60 * 60 * 1000;
+        const checkOverdueBoarding = () => {
+          const now = Date.now();
+          students.forEach((stu) => {
+            if (!stu.activeSession || !stu.activeSession.boardTimeMs) return;
+            const elapsed = now - Number(stu.activeSession.boardTimeMs);
+            if (elapsed >= ONE_HOUR_MS) {
+              const lockKey = `${stu.id}-${stu.activeSession.boardTimeMs}`;
+              const alreadyLogged = logs.some(
+                (l) =>
+                  l.studentId === stu.id &&
+                  l.type === 'NO_ALIGHT_1H' &&
+                  l.tagTimeMs >= Number(stu.activeSession.boardTimeMs)
+              );
+              if (!noAlightSentLockRef.current[lockKey] && !alreadyLogged) {
+                sendNoAlightAlert(stu, false, false);
+              }
+            }
+          });
+        };
+
+        checkOverdueBoarding();
+        const timer = setInterval(checkOverdueBoarding, 15000);
+        return () => clearInterval(timer);
+      }, [students, logs, sendNoAlightAlert]);
+
+      const toggleGpsTracker = useCallback(() => {
+        if (gpsTracking) {
+          if (gpsWatchIdRef.current !== null && 'geolocation' in navigator) {
+            navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+            gpsWatchIdRef.current = null;
+          }
+          setGpsTracking(false);
+          showToast(isEn ? '🛰️ Live GPS tracking paused.' : '🛰️ 실시간 GPS 추적을 일시 중지했습니다.');
+          return;
+        }
+
+        if (!('geolocation' in navigator)) {
+          showToast(isEn ? '⚠️ GPS is not supported on this browser.' : '⚠️ 이 브라우저에서는 GPS 기능을 지원하지 않습니다.');
+          return;
+        }
+
+        const watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            const speedMs = pos.coords.speed;
+            const nextCoords = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: Math.round(pos.coords.accuracy || 0),
+              speedKmh: typeof speedMs === 'number' && speedMs >= 0 ? Math.round(speedMs * 3.6) : 0,
+              updatedAt: Date.now()
+            };
+            setBusCoords(nextCoords);
+            setGpsTracking(true);
+
+            if (Date.now() - lastBusDbPublishRef.current >= 5000) {
+              lastBusDbPublishRef.current = Date.now();
+              publishBusLocationToDb(currentBusObj.id, nextCoords);
+            }
+          },
+          () => {
+            showToast(
+              isEn
+                ? '❌ Please allow Location (GPS) permission in Chrome!'
+                : '❌ 휴대폰 위치(GPS) 켜짐 및 Chrome 위치 권한 [허용]을 확인해 주세요!'
+            );
+            setGpsTracking(false);
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 3000,
+            timeout: 12000
+          }
+        );
+        gpsWatchIdRef.current = watchId;
+        showToast(
+          isEn
+            ? '🛰️ Live GPS Geofence & Route Map Active!'
+            : '🛰️ 실시간 GPS 정류장 감시 및 부모님 지도 위치 송출 시작!'
+        );
+      }, [gpsTracking, isEn, showToast, publishBusLocationToDb, currentBusObj.id]);
+
+      useEffect(() => {
+        return () => {
+          if (gpsWatchIdRef.current !== null && 'geolocation' in navigator) {
+            navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+          }
+        };
+      }, []);
+
+      useEffect(() => {
+        if (!gpsTracking || !busCoords) return;
+
+        students.forEach((stu) => {
+          if (typeof stu.stopLat !== 'number' || typeof stu.stopLng !== 'number') return;
+          if (etaSentLockRef.current[stu.id]) return;
+
+          const isTarget =
+            runDirection === 'DROPOFF'
+              ? Boolean(stu.activeSession)
+              : !stu.activeSession && (stu.routeId || 'BUS-01') === currentBusObj.id;
+
+          if (!isTarget) return;
+
+          const distM = calcDistanceMeters(
+            busCoords.lat,
+            busCoords.lng,
+            stu.stopLat,
+            stu.stopLng
+          );
+
+          if (distM !== null && distM <= activePreset.radiusM) {
+            sendApproachingAlert(stu, activePreset.etaMins, true, distM, false);
+          }
+        });
+      }, [busCoords, gpsTracking, students, runDirection, currentBusObj, activePreset, sendApproachingAlert]);
+
+      const pinCurrentGpsToStudent = (stuId) => {
+        const saveCoords = (lat, lng) => {
+          let updatedTarget = null;
+          const updated = students.map((s) => {
+            if (s.id === stuId) {
+              updatedTarget = { ...s, stopLat: lat, stopLng: lng };
+              return updatedTarget;
+            }
+            return s;
+          });
+          delete etaSentLockRef.current[stuId];
+          setStudents(updated);
+          if (updatedTarget) {
+            syncSingleStudentToDb(updatedTarget);
+            showToast(
+              isEn
+                ? `📌 Saved current GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) as ${sName(updatedTarget)}'s stop!`
+                : `📌 현재 위치(${lat.toFixed(4)}, ${lng.toFixed(4)})가 [${sName(updatedTarget)}] 정류장으로 저장되었습니다!`
+            );
+          }
+        };
+
+        if (busCoords) {
+          saveCoords(busCoords.lat, busCoords.lng);
+          return;
+        }
+        if ('geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const lat = pos.coords.latitude;
+              const lng = pos.coords.longitude;
+              const coordsObj = {
+                lat,
+                lng,
+                accuracy: Math.round(pos.coords.accuracy || 0),
+                speedKmh: 0,
+                updatedAt: Date.now()
+              };
+              setBusCoords(coordsObj);
+              publishBusLocationToDb(currentBusObj.id, coordsObj);
+              saveCoords(lat, lng);
+            },
+            () => {
+              showToast(
+                isEn
+                  ? '❌ Turn ON Location (GPS) first to pin stop!'
+                  : '❌ 먼저 위치(GPS) 권한을 허용해 주세요!'
+              );
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+          );
+        }
+      };
+
+      const startGalaxyNfcScanner = async () => {
+        if (!('NDEFReader' in window)) {
+          showToast(
+            isEn
+              ? '⚠️ Web NFC works on Android Chrome. Use the simulation buttons below on desktop/iOS!'
+              : '⚠️ 실물 NFC 스캐너는 안드로이드 Chrome에서 작동합니다. PC/아이폰에서는 아래 시뮬레이션 버튼을 눌러주세요!'
+          );
+          return;
+        }
+        try {
+          const ndef = new window.NDEFReader();
+          await ndef.scan();
+          setNfcScanning(true);
+          ndef.onreading = (event) => {
+            const serial = event.serialNumber || 'NEW-TAG-' + Math.floor(1000 + Math.random() * 9000);
+            if (handleTagUidRef.current) handleTagUidRef.current(serial);
+          };
+          if ('wakeLock' in navigator) {
+            try {
+              await navigator.wakeLock.request('screen');
+              setWakeLockActive(true);
+            } catch (e) {}
+          }
+          playChime('BOARD', soundMuted);
+          showToast(
+            isEn
+              ? '📡 NFC Scanner Active! Tap backpack charm to back of phone.'
+              : '📡 실물 NFC 리더 가동 완료! 폰 뒷면에 스티커를 삑! 대주세요.'
+          );
+        } catch (err) {
+          showToast(
+            isEn
+              ? `❌ NFC Error (${err.name}): Turn ON NFC in phone bar & allow Chrome NFC permission!`
+              : `❌ NFC 차단됨 (${err.name}): 상단바 NFC 켜짐 및 Chrome 우측상단 [⋮ → 설정 → 사이트 설정 → NFC 허용]을 확인해 주세요!`
+          );
+        }
+      };
+
+      // NFC Tag Engine (bypassCooldown=true when triggered from interactive demo buttons)
+      const handleTagUidRef = useRef(null);
+      const handleTagUid = useCallback(
+        (rawUid, bypassCooldown = false, showImmediateBubble = false) => {
+          const cleanUid = (rawUid || '').trim().toUpperCase();
+          if (!cleanUid) return;
+
+          if (capturingUidForEdit) {
+            setEditUid(cleanUid);
+            setCapturingUidForEdit(false);
+            playChime('BOARD', soundMuted);
+            showToast(
+              isEn
+                ? `✅ Captured NFC Sticker UID (${cleanUid}) for editing!`
+                : `✅ 수정용 새 스티커 UID(${cleanUid})가 입력되었습니다!`
+            );
+            return;
+          }
+
+          if (capturingUidForOffice) {
+            setNewStuUid(cleanUid);
+            setCapturingUidForOffice(false);
+            playChime('BOARD', soundMuted);
+            showToast(
+              isEn
+                ? `✅ Captured NFC Sticker UID (${cleanUid})!`
+                : `✅ 새 스티커 UID(${cleanUid})가 자동 입력되었습니다!`
+            );
+            return;
+          }
+
+          const stu = students.find((s) => (s.uid || '').toUpperCase() === cleanUid);
+
+          if (!stu) {
+            playChime('ERROR', soundMuted);
+            setUnregisteredUid(cleanUid);
+            setReaderBanner({
+              type: 'UNREGISTERED',
+              uid: cleanUid,
+              timeMs: Date.now()
+            });
+            return;
+          }
+
+          const nowMs = Date.now();
+          const DUPLICATE_COOLDOWN_MS = 180000;
+          if (!bypassCooldown && stu.lastTapMs && nowMs - stu.lastTapMs < DUPLICATE_COOLDOWN_MS) {
+            const remainSec = Math.ceil((DUPLICATE_COOLDOWN_MS - (nowMs - stu.lastTapMs)) / 1000);
+            const remainMin = Math.floor(remainSec / 60);
+            const remSecOnly = remainSec % 60;
+            const remainLabel = isEn
+              ? `${remainMin > 0 ? remainMin + 'm ' : ''}${remSecOnly}s`
+              : `${remainMin > 0 ? remainMin + '분 ' : ''}${remSecOnly}초`;
+            playChime('ERROR', soundMuted);
+            speakVoice(
+              isEn ? 'Already scanned within 3 minutes!' : '이미 태그되었습니다. 3분간 중복 방지됩니다.',
+              lang,
+              soundMuted
+            );
+            setReaderBanner({
+              type: 'DUPLICATE',
+              student: stu,
+              remain: remainSec,
+              remainLabel,
+              timeMs: nowMs
+            });
+            return;
+          }
+
+          const actionType = stu.activeSession ? 'ALIGHT' : 'BOARD';
+          const phraseIdx = schoolTapAlerts.randomIndex(actionType, lang);
+
+          if (actionType === 'ALIGHT') {
+            delete etaSentLockRef.current[stu.id];
+          }
+
+          const shouldAutoPin =
+            autoPinEnabled &&
+            busCoords &&
+            (typeof stu.stopLat !== 'number' || typeof stu.stopLng !== 'number');
+
+          const updatedStudent = {
+            ...stu,
+            stopLat: shouldAutoPin ? busCoords.lat : stu.stopLat,
+            stopLng: shouldAutoPin ? busCoords.lng : stu.stopLng,
+            activeSession:
+              actionType === 'BOARD'
+                ? { boardTimeMs: nowMs, vehicleId: currentBusObj.id }
+                : null,
+            lastTapMs: nowMs
+          };
+
+          const updatedList = students.map((item) =>
+            item.id === stu.id ? updatedStudent : item
+          );
+          setStudents(updatedList);
+          setUnregisteredUid('');
+
+          syncSingleStudentToDb(updatedStudent);
+
+          const newLog = {
+            id: `tap-${stu.id}-${nowMs}`,
+            schoolId,
+            studentId: stu.id,
+            studentName: isEn ? stu.nameEn : stu.nameKo,
+            vehicleId: currentBusObj.id,
+            vehicleNameKo: currentBusObj.nameKo,
+            vehicleNameEn: currentBusObj.nameEn,
+            type: actionType,
+            tagTimeMs: nowMs,
+            stopKo: stu.stopKo,
+            stopEn: stu.stopEn,
+            phraseIdx
+          };
+
+          setLogs((prev) => [newLog, ...prev]);
+          insertRideLogToDb(newLog);
+
+          playChime(actionType, soundMuted);
+          const dispName = sName(stu);
+          speakVoice(
+            isEn
+              ? `${dispName}, ${actionType === 'BOARD' ? 'boarding' : 'drop-off'} confirmed!`
+              : `${dispName} 어린이, ${actionType === 'BOARD' ? '승차' : '하차'} 확인되었습니다.`,
+            lang,
+            soundMuted
+          );
+
+          if (showImmediateBubble && !isPausedToday && tapBubbleEnabled) {
+            showRideAlert(newLog);
+          }
+
+          if (shouldAutoPin) {
+            showToast(
+              isEn
+                ? `📌 Auto-Pinned ${dispName}'s bus stop coordinates from this tap!`
+                : `📌 [자동 기억 완료] 방금 찍은 위치가 ${dispName}의 정류장 GPS로 자동 저장되었습니다!`
+            );
+          }
+
+          setReaderBanner({
+            type: actionType,
+            student: updatedStudent,
+            autoPinned: shouldAutoPin,
+            timeMs: nowMs
+          });
+        },
+        [
+          capturingUidForEdit,
+          capturingUidForOffice,
+          students,
+          soundMuted,
+          isEn,
+          lang,
+          autoPinEnabled,
+          busCoords,
+          currentBusObj,
+          schoolId,
+          syncSingleStudentToDb,
+          insertRideLogToDb,
+          sName,
+          isPausedToday,
+          tapBubbleEnabled,
+          showRideAlert,
+          showToast
+        ]
+      );
+
+      useEffect(() => {
+        handleTagUidRef.current = handleTagUid;
+      }, [handleTagUid]);
+
+      const bindStickerToStudent = async (targetStuId) => {
+        if (!unregisteredUid) return;
+        const boundUid = unregisteredUid;
+
+        const prevOwners = students.filter(
+          (s) => s.id !== targetStuId && s.uid && s.uid.toUpperCase() === boundUid.toUpperCase()
+        );
+
+        const updatedList = students.map((s) => {
+          if (s.id === targetStuId) return { ...s, uid: boundUid };
+          if (s.uid && s.uid.toUpperCase() === boundUid.toUpperCase()) {
+            return { ...s, uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000) };
+          }
+          return s;
+        });
+        setStudents(updatedList);
+
+        for (const oldStu of prevOwners) {
+          await syncSingleStudentToDb({
+            ...oldStu,
+            uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+          });
+        }
+        const target = updatedList.find((s) => s.id === targetStuId);
+        if (target) await syncSingleStudentToDb(target);
+
+        setUnregisteredUid('');
+        playChime('BOARD', soundMuted);
+        showToast(
+          isEn
+            ? `✅ Paired sticker (${boundUid}) to ${sName(target)}! Tap again to test!`
+            : `✅ 새 스티커(${boundUid})를 [${sName(target)}] 키링으로 등록 완료! 이제 한 번 더 찍어보세요!`
+        );
+        setReaderBanner({
+          type: 'BOUND_OK',
+          student: target,
+          uid: boundUid,
+          timeMs: Date.now()
+        });
+      };
+
+      const isGoogleSandbox =
+        window.location.hostname.includes('usercontent.goog') ||
+        window.location.hostname.includes('google') ||
+        window.location.protocol === 'blob:' ||
+        window.location.protocol === 'file:';
+
+      const effectiveBaseUrl = publicSiteUrl.trim()
+        ? publicSiteUrl.trim().replace(/\/+$/, '')
+        : `${window.location.origin}${window.location.pathname}`;
+
+      const canShowPublicQr = Boolean(sbKey) && (!isGoogleSandbox || Boolean(publicSiteUrl.trim()));
+
+      const buildRoleUrl = (roleType, inviteCodeOpt = '') => {
+        let u = `${effectiveBaseUrl}?role=${roleType}&schoolId=${encodeURIComponent(schoolId)}&lang=${lang}&sbUrl=${encodeURIComponent(sbUrl)}&sbKey=${encodeURIComponent(sbKey)}`;
+        if (roleType === 'PARENT' && validPushPublicKey(vapidPubKey)) {
+          u += '&vapid=' + encodeURIComponent(vapidPubKey);
+        }
+        if (inviteCodeOpt) {
+          u += `&invite=${encodeURIComponent(inviteCodeOpt)}`;
+        }
+        return u;
+      };
+
+      const popupStudent = useMemo(
+        () => students.find((s) => s.id === popupLog?.studentId) || currentStudent,
+        [students, popupLog, currentStudent]
+      );
+
+      // ======================================================================
+      // Sub-View A: Parent App View (with Interactive Demo Simulator Bar!)
+      // ======================================================================
+      const renderDedicatedParentView = () => {
+        if (myLinkedChildren.length === 0) {
+          return (
+            <div className="max-w-md mx-auto pt-4">
+              <div className="bg-white rounded-[2.2rem] p-6 border-2 border-amber-200 shadow-xl text-center space-y-5">
+                <div className="w-16 h-16 rounded-3xl bg-amber-400 text-slate-950 flex items-center justify-center text-3xl mx-auto shadow-md float-bounce">
+                  💛
+                </div>
+                <div className="space-y-1.5">
+                  <span className="inline-block px-3 py-1 rounded-full bg-amber-100 text-amber-900 text-[11px] font-black">
+                    {isEn ? 'Parent Peace-of-Mind App' : '학부모님 전용 안심 알림 앱'}
+                  </span>
+                  <h2 className="text-xl font-black text-slate-900 break-keep">
+                    {isEn ? 'Connect Your Child’s Bus Pass' : '어떤 어린이의 학부모님이신가요?'}
+                  </h2>
+                  <p className="text-xs text-slate-500 leading-relaxed break-keep">
+                    {isEn ? (
+                      <>
+                        Enter the <strong>unique parent invite code</strong> from your school to receive private boarding &amp; drop-off bubbles for your child only.
+                      </>
+                    ) : (
+                      <>
+                        학원·학교에서 안내받은 <strong>우리 아이 전용 초대코드</strong>를 입력하면, 내 아이의 승하차 버블 알림만 안전하게 연결됩니다.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap justify-center gap-1.5">
+                  {RELATION_OPTIONS.map((rel) => (
+                    <button
+                      key={rel.key}
+                      type="button"
+                      onClick={() => setParentRelKey(rel.key)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black border transition ${
+                        parentRelKey === rel.key
+                          ? 'bg-slate-900 border-slate-900 text-white'
+                          : 'bg-slate-50 border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {isEn ? rel.en : rel.ko}
+                    </button>
+                  ))}
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleConnectChildByCode(inviteCodeInput, parentRelKey);
+                  }}
+                  className="space-y-2.5"
+                >
+                  <input
+                    type="text"
+                    value={inviteCodeInput}
+                    onChange={(e) => setInviteCodeInput(e.target.value)}
+                    placeholder={
+                      isEn
+                        ? 'Enter Invite Code (e.g., EMMA-1004)'
+                        : '초대코드 입력 (예: EMMA-1004)'
+                    }
+                    className="w-full px-4 py-3.5 rounded-2xl border-2 border-amber-300 bg-amber-50/40 text-center font-mono text-base font-black uppercase tracking-wider focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={linkingBusy}
+                    className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 disabled:opacity-60 text-slate-950 font-black text-sm shadow-md active:scale-98 transition"
+                  >
+                    {linkingBusy
+                      ? isEn
+                        ? 'Checking Code...'
+                        : '초대코드 확인 중...'
+                      : isEn
+                      ? '🔑 Link My Child & Start Alerts'
+                      : '🔑 우리 아이 연결하고 알림 받기'}
+                  </button>
+                </form>
+
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">{renderNotificationTest()}{renderInstallButton()}</div>
+                  {renderNotificationStatus()}
+                  {renderInstallHelp()}
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400">
+                    {isEn
+                      ? '💡 Quick Demo: Tap a sample student pass below'
+                      : '💡 등록된 초대코드 바로 눌러서 연결해보기'}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {students.slice(0, 6).map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => handleConnectChildByCode(s.inviteCode, parentRelKey)}
+                        className="p-2.5 rounded-2xl bg-slate-50 hover:bg-amber-50 border border-slate-200 text-left transition"
+                      >
+                        <div className="text-xs font-black text-slate-800">
+                          {s.avatarEmoji}{' '}
+                          {isEn ? `Join as ${sName(s)}'s Parent` : `${sName(s)} 학부모로 연결`}
+                        </div>
+                        <div className="text-[11px] font-mono font-bold text-amber-700">
+                          {s.inviteCode}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        const myLogs = logs.filter((l) => l.studentId === currentStudent?.id);
+        const visibleLogs = showAllLogs ? myLogs : myLogs.slice(0, 10);
+        const myChecklist = checklists[currentStudent?.id] || [];
+        const curName = sName(currentStudent);
+        const curStop = sStop(currentStudent);
+        const curGrade = sGrade(currentStudent);
+        const hasStopPin =
+          typeof currentStudent.stopLat === 'number' &&
+          typeof currentStudent.stopLng === 'number';
+
+        const childRouteId = currentStudent.routeId || 'BUS-01';
+        const childBusMeta = BUS_ROUTES.find((r) => r.id === childRouteId) || BUS_ROUTES[0];
+        const childBusLabel = isEn ? childBusMeta.nameEn : childBusMeta.nameKo;
+        const childBusLiveLoc = liveBusLocations[childRouteId] || null;
+
+        return (
+          <div className="space-y-4">
+            {/* Instant Interactive Demo Simulator Strip (1-Click Test for Evaluators!) */}
+            <div className="bg-slate-900 text-white rounded-3xl p-4 shadow-md border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black text-amber-400 flex items-center gap-1.5">
+                  <span>✨</span>
+                  <span>
+                    {isEn
+                      ? `Instant Live Demo — Test ${curName}'s Bus Alerts`
+                      : `✨ 원클릭 라이브 체험 — ${curName} 어린이 알림 바로 눌러보기`}
+                  </span>
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-bold text-slate-300">
+                  {isEn ? 'Interactive Prototype' : '시제품 체험'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleTagUid(currentStudent.uid, true, true)}
+                  className={`py-2.5 px-2 rounded-2xl text-xs font-black transition active:scale-95 ${
+                    currentStudent.activeSession
+                      ? 'bg-sky-500 hover:bg-sky-400 text-white'
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                  }`}
+                >
+                  {currentStudent.activeSession
+                    ? isEn
+                      ? '🏫 Tap Drop-off'
+                      : '🏫 하차 태그 체험'
+                    : isEn
+                    ? '🚌 Tap Boarding'
+                    : '🚌 승차 태그 체험'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendApproachingAlert(currentStudent, approachingMins, false, 950, true)}
+                  className="py-2.5 px-2 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-black transition active:scale-95"
+                >
+                  {isEn ? `📍 ${approachingMins}m ETA Bubble` : `📍 ${approachingMins}분전 도착버블`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendNoAlightAlert(currentStudent, true, true)}
+                  className="py-2.5 px-2 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition active:scale-95"
+                >
+                  {isEn ? '🏷️ 1h Tag Check' : '🏷️ 1시간 미태그 안내'}
+                </button>
+              </div>
+            </div>
+
+            {/* System Top-Bar Notification & PWA App Install Card */}
+            <div className="bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 rounded-3xl p-4 border-2 border-amber-300 space-y-2.5 shadow-xs">
+              <h2 className="text-xs font-black text-amber-950">{isEn ? 'Phone notifications' : '휴대폰 알림'}</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {renderNotificationTest()}
+                {renderInstallButton()}
+              </div>
+              {renderNotificationStatus()}
+              {renderInstallHelp()}
+            </div>
+
+            {/* Child Connection Header Card */}
+            <div className="bg-white rounded-3xl p-4 border-2 border-amber-300 shadow-xs space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl text-white shadow-xs shrink-0"
+                    style={{ backgroundColor: currentStudent.keyringHex || '#F472B6' }}
+                  >
+                    {currentStudent.avatarEmoji}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
+                        {isEn ? '✔ Live Auto-Sync' : '✔ 실시간 자동연동됨'}
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">
+                        #{currentStudent.inviteCode}
+                      </span>
+                    </div>
+                    <div className="text-sm font-black text-slate-900 truncate mt-0.5">
+                      {isEn
+                        ? `${curName}'s ${parentRelationDisplay} Phone 💛`
+                        : `${curName} 어린이의 ${parentRelationDisplay} 휴대폰 💛`}
+                    </div>
+                  </div>
+                </div>
+
+                {deviceRole === 'PARENT' && (
+                  <button
+                    type="button"
+                    onClick={handleDisconnectParent}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 text-[11px] font-bold shrink-0"
+                  >
+                    {isEn ? 'Switch Code' : '코드 변경'}
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-amber-100">
+                <div className="flex items-center gap-1.5 overflow-x-auto">
+                  {myLinkedChildren.map((child) => (
+                    <button
+                      key={child.id}
+                      onClick={() => setActiveStudentId(child.id)}
+                      className={`px-3 py-1 rounded-xl text-xs font-black transition shrink-0 ${
+                        child.id === currentStudent.id
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {child.avatarEmoji} {sName(child)}
+                    </button>
+                  ))}
+                  {deviceRole === 'PARENT' && (
+                    <button
+                      onClick={() => setAddSiblingModalOpen(true)}
+                      className="px-2.5 py-1 rounded-xl border border-dashed border-slate-300 text-slate-500 text-[11px] font-bold shrink-0"
+                    >
+                      {isEn ? '+ Add Sibling' : '+ 형제·자매 추가'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="inline-flex bg-slate-100 p-0.5 rounded-xl text-[11px] font-black shrink-0">
+                  <button
+                    onClick={() => setParentTab('BUBBLES')}
+                    className={`px-2 py-1 rounded-lg ${parentTab === 'BUBBLES' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}
+                  >
+                    {isEn ? '🚌 Bubbles' : '🚌 버블톡'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setParentTab('MAP');
+                      refreshBusLocationsFromDb();
+                    }}
+                    className={`px-2 py-1 rounded-lg ${parentTab === 'MAP' ? 'bg-sky-600 text-white' : 'text-slate-500'}`}
+                  >
+                    {isEn ? '🗺️ Bus Map' : '🗺️ 버스위치'}
+                  </button>
+                  <button
+                    onClick={() => setParentTab('CHECKLIST')}
+                    className={`px-2 py-1 rounded-lg ${parentTab === 'CHECKLIST' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
+                  >
+                    {isEn ? '✅ Tasks' : '✅ 알림장'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {parentTab === 'MAP' ? (
+              <LiveBusRouteMap
+                busLoc={childBusLiveLoc}
+                stopLat={currentStudent.stopLat}
+                stopLng={currentStudent.stopLng}
+                stopLabel={curStop}
+                vehicleLabel={childBusLabel}
+                isEn={isEn}
+                onRefresh={async () => {
+                  await refreshBusLocationsFromDb();
+                  showToast(isEn ? '🛰️ Refreshed bus GPS!' : '🛰️ 최신 버스 위치를 확인했습니다!');
+                }}
+              />
+            ) : parentTab === 'BUBBLES' ? (
+              <>
+                <div
+                  className={`rounded-3xl p-5 shadow-md text-white bg-gradient-to-br ${
+                    currentStudent.activeSession
+                      ? 'from-emerald-400 via-teal-500 to-cyan-500'
+                      : 'from-slate-800 via-slate-900 to-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs opacity-90 font-bold">
+                    <span>
+                      🚏 {curStop}{' '}
+                      {hasStopPin ? (isEn ? '(🛰️ GPS Pinned)' : '(🛰️ 정류장 GPS 등록됨)') : ''}
+                    </span>
+                    <span>{curGrade}</span>
+                  </div>
+                  <div className="text-xl font-black mt-1.5">
+                    {currentStudent.activeSession
+                      ? isEn
+                        ? `🚌 ${curName} is Riding Safely!`
+                        : `🚌 ${curName} 어린이 현재 탑승 이동 중!`
+                      : isEn
+                      ? `🏠 Waiting for ${curName}'s Next Tap`
+                      : `🏠 ${curName} 어린이 승하차 대기 중`}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-white/15">
+                    <span className="text-[11px] opacity-90 break-keep">
+                      {isEn
+                        ? 'Wondering if the bus passed or is delayed?'
+                        : '버스가 지나갔는지 늦어지는지 궁금할 땐?'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setParentTab('MAP');
+                        refreshBusLocationsFromDb();
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-white text-slate-900 text-[11px] font-black shadow-xs shrink-0"
+                    >
+                      {isEn ? '🗺️ Track Bus Route' : '🗺️ 실시간 위치·경로 보기'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-3xl p-4 border border-fuchsia-200 space-y-2.5">
+                  <div className="text-xs font-black text-slate-900">
+                    {isEn ? '🔔 Custom Alert Preferences' : '🔔 내 휴대폰 알림 수신 설정'}
+                  </div>
+                  <div className="flex items-center justify-between text-xs gap-2">
+                    <span className="font-bold text-slate-700">
+                      {isEn
+                        ? `📍 Bus Stop Approaching Alert (${approachingMins}m prior)`
+                        : `📍 정류장 도착 ${approachingMins}분 전 마중 알림`}
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {[10, 5].map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setApproachingMins(m)}
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-black ${
+                            approachingMins === m ? 'bg-fuchsia-600 text-white' : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {isEn ? `${m}m` : `${m}분전`}
+                        </button>
+                      ))}
+                      <input
+                        type="checkbox"
+                        checked={approachingEnabled}
+                        onChange={(e) => setApproachingEnabled(e.target.checked)}
+                        className="w-4 h-4 accent-fuchsia-600"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
+                    <span className="font-bold text-slate-700">
+                      {isEn
+                        ? '🚌 Boarding & Drop-off NFC Tap Bubbles'
+                        : '🚌 승차·하차 NFC 태그 버블 알림'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={tapBubbleEnabled}
+                      onChange={(e) => setTapBubbleEnabled(e.target.checked)}
+                      className="w-4 h-4 accent-emerald-600"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 gap-2">
+                    <div>
+                      <div className="font-black text-slate-800">
+                        {isEn ? '🌙 Mute All Alerts Today' : '🌙 오늘 하루 알림 끄기 (결석·가족이동)'}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-bold">
+                        {isPausedToday
+                          ? isEn
+                            ? 'Paused until midnight · Resumes tomorrow'
+                            : '오늘 자정까지 푸시 중지됨 · 내일 자동 복구'
+                          : isEn
+                          ? 'Pause push alerts for today only'
+                          : '브라우저 차단 없이 오늘만 푸시 알림을 잠시 끕니다'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={togglePauseToday}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition shrink-0 ${
+                        isPausedToday
+                          ? 'bg-amber-400 text-slate-950 shadow-xs'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {isPausedToday
+                        ? isEn
+                          ? 'Resume Now'
+                          : '다시 켜기'
+                        : isEn
+                        ? 'Mute Today'
+                        : '오늘 끄기'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-3xl p-4 border border-amber-100 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-black text-slate-900">
+                      {isEn
+                        ? `💬 ${curName}'s Recent Alerts (${visibleLogs.length}/${myLogs.length})`
+                        : `💬 ${curName} 어린이 최근 알림 (${visibleLogs.length}/${myLogs.length}건)`}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {myLogs.length > 10 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllLogs((prev) => !prev)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 text-[10px] font-black transition"
+                        >
+                          {showAllLogs
+                            ? isEn
+                              ? 'Show Top 10'
+                              : '최근 10건만 보기'
+                            : isEn
+                            ? `View All (${myLogs.length})`
+                            : `전체보기 (${myLogs.length})`}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {myLogs.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-400 font-bold leading-relaxed">
+                      {isEn ? (
+                        <>
+                          No scans recorded yet today!<br />
+                          Tap <strong>"🚌 Tap Boarding"</strong> in the dark bar above to see a live bubble!
+                        </>
+                      ) : (
+                        <>
+                          아직 오늘 찍힌 기록이 없어요!<br />
+                          위 검은색 바의 <strong>[🚌 승차 태그 체험]</strong> 버튼을 눌러 버블을 확인해 보세요!
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    visibleLogs.map((l) => {
+                      const q = resolveQuote(l);
+                      return (
+                        <div
+                          key={l.id}
+                          onClick={() => setPopupLog(l)}
+                          className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 cursor-pointer flex items-start gap-2.5"
+                        >
+                          <span className="text-2xl">{q.emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between text-[11px] font-bold text-slate-500">
+                              <span>
+                                {l.type === 'NO_ALIGHT_1H'
+                                  ? isEn
+                                    ? '🏷️ Exit Tag Check-In (1h)'
+                                    : '🏷️ 하차 태그 확인 안내'
+                                  : l.type === 'BOARD'
+                                  ? isEn
+                                    ? '🚌 Boarding Confirmed'
+                                    : '🚌 승차 완료'
+                                  : l.type === 'ALIGHT'
+                                  ? isEn
+                                    ? '🏫 Safe Drop-off'
+                                    : '🏫 하차 완료'
+                                  : isEn
+                                  ? `📍 ~${l.etaMinutes || 10}m Away${l.autoGps ? ' (Live GPS)' : ''}`
+                                  : `📍 도착 ${l.etaMinutes || 10}분전${l.autoGps ? ' (GPS 자동)' : ''}`}
+                              </span>
+                              <span className="font-mono">{formatTime(l.tagTimeMs)}</span>
+                            </div>
+                            <div className="text-xs font-black text-slate-900 mt-0.5 break-keep">“{q.title}”</div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="bg-white rounded-3xl p-4 border border-indigo-200 space-y-3">
+                <div className="text-sm font-black text-indigo-950">
+                  {isEn
+                    ? `✅ ${curName}'s School Supplies & Homework`
+                    : `✅ ${curName}의 등교 준비물 · 숙제 체크리스트`}
+                </div>
+                {myChecklist.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() =>
+                      setChecklists((prev) => ({
+                        ...prev,
+                        [currentStudent.id]: (prev[currentStudent.id] || []).map((c) =>
+                          c.id === item.id ? { ...c, done: !c.done } : c
+                        )
+                      }))
+                    }
+                    className="p-3 rounded-2xl border border-slate-200 flex items-center gap-2.5 cursor-pointer"
+                  >
+                    <span>{item.done ? '✅' : '⬜'}</span>
+                    <span className={`text-xs font-bold ${item.done ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+                      {isEn ? item.titleEn || item.titleKo : item.titleKo || item.titleEn}
+                    </span>
+                  </div>
+                ))}
+                <textarea
+                  rows={3}
+                  value={noticeInput}
+                  onChange={(e) => setNoticeInput(e.target.value)}
+                  placeholder={
+                    isEn
+                      ? 'Paste teacher message from ClassDojo, Remind, or school email to extract tasks...'
+                      : '알림장이나 ClassDojo 공지글을 붙여넣으면 체크리스트로 만들어 드려요...'
+                  }
+                  className="w-full p-3 rounded-2xl border border-slate-200 text-xs"
+                />
+                <button
+                  onClick={() => {
+                    if (!noticeInput.trim()) return;
+                    const lines = noticeInput
+                      .split(/\n/)
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    const added = lines.map((line, i) => ({
+                      id: 'ai-' + Date.now() + '-' + i,
+                      category: 'SUPPLIES',
+                      titleKo: line,
+                      titleEn: line,
+                      done: false
+                    }));
+                    setChecklists((prev) => ({
+                      ...prev,
+                      [currentStudent.id]: [...added, ...(prev[currentStudent.id] || [])]
+                    }));
+                    setNoticeInput('');
+                    playChime('BOARD', soundMuted);
+                  }}
+                  className="w-full py-2.5 rounded-2xl bg-indigo-600 text-white text-xs font-black"
+                >
+                  {isEn ? '✨ Extract AI Checklist Items' : '✨ AI 체크리스트 추가하기'}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // ======================================================================
+      // Sub-View B: Bus Reader Kiosk View
+      // ======================================================================
+      const renderBusReaderView = () => (
+        <div className="bg-slate-900 text-white rounded-[2.2rem] p-6 shadow-xl space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedBusRouteId}
+                onChange={(e) => setSelectedBusRouteId(e.target.value)}
+                className="bg-slate-800 border border-slate-700 text-emerald-300 font-black rounded-xl px-2.5 py-1.5 text-xs"
+              >
+                {BUS_ROUTES.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    🚌 {isEn ? r.nameEn : r.nameKo}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={runDirection}
+                onChange={(e) => {
+                  etaSentLockRef.current = {};
+                  setRunDirection(e.target.value);
+                }}
+                className="bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-xl px-2.5 py-1.5 text-xs"
+              >
+                <option value="DROPOFF">
+                  {isEn ? '🏡 Drop-off (Watch Riders)' : '🏡 하교 (탑승자 정류장 감시)'}
+                </option>
+                <option value="PICKUP">
+                  {isEn ? '🏫 Pick-up (Morning Route)' : '🏫 등교 (노선 전체 감시)'}
+                </option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {lastTxDebug && (
+                <span className="px-2.5 py-1 rounded-xl bg-slate-800 border border-slate-700 text-[11px] font-bold">
+                  {lastTxDebug}
+                </span>
+              )}
+              <button
+                onClick={() => setSoundMuted(!soundMuted)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-amber-300 font-bold"
+              >
+                {soundMuted
+                  ? isEn
+                    ? '🔇 Muted'
+                    : '🔇 음소거'
+                  : isEn
+                  ? '🔊 Voice ON'
+                  : '🔊 음성 켜짐'}
+              </button>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-800/90 border border-slate-700 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-black flex items-center gap-1.5">
+                <span>🛰️</span>
+                <span>
+                  {gpsTracking
+                    ? isEn
+                      ? 'Live GPS Geofence & Map ON'
+                      : '실시간 GPS 정류장 · 지도 송출 중'
+                    : isEn
+                    ? 'GPS Geofence Standby'
+                    : 'GPS 정류장 · 지도 송출 대기'}
+                </span>
+              </div>
+              <button
+                onClick={toggleGpsTracker}
+                className={`px-3 py-1 rounded-xl text-[11px] font-black transition ${
+                  gpsTracking
+                    ? 'bg-emerald-500 text-slate-950'
+                    : 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white'
+                }`}
+              >
+                {gpsTracking
+                  ? isEn
+                    ? '● GPS Active'
+                    : '● GPS 수신중'
+                  : isEn
+                  ? 'Turn ON GPS'
+                  : '실제 GPS 켜기'}
+              </button>
+            </div>
+
+            {busCoords && (
+              <div className="text-[11px] font-mono text-emerald-300 bg-slate-900/80 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                <span>
+                  📍 {busCoords.lat.toFixed(5)}, {busCoords.lng.toFixed(5)}
+                </span>
+                <span>
+                  ±{busCoords.accuracy}m · {busCoords.speedKmh}km/h
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-1.5">
+              {GEOFENCE_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    etaSentLockRef.current = {};
+                    setGeofencePresetId(p.id);
+                  }}
+                  className={`py-1.5 px-2 rounded-xl text-[10px] font-black border transition ${
+                    geofencePresetId === p.id
+                      ? 'bg-fuchsia-600 border-fuchsia-400 text-white'
+                      : 'bg-slate-900 border-slate-700 text-slate-400'
+                  }`}
+                >
+                  {isEn ? p.en : p.ko}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center justify-between text-[11px] text-slate-300 pt-1 cursor-pointer">
+              <span>
+                {isEn
+                  ? '📌 Auto-Pin stop GPS on child’s first NFC tap'
+                  : '📌 첫 NFC 태그 위치로 정류장 좌표 자동 기억 (Auto-Pin)'}
+              </span>
+              <input
+                type="checkbox"
+                checked={autoPinEnabled}
+                onChange={(e) => setAutoPinEnabled(e.target.checked)}
+                className="w-4 h-4 accent-emerald-400"
+              />
+            </label>
+          </div>
+
+          {unregisteredUid && (
+            <div className="bubble-pop-in p-4 rounded-3xl bg-amber-400 text-slate-950 space-y-2.5 shadow-lg">
+              <div className="text-xs font-black uppercase">
+                {isEn ? '🎉 New NFC Sticker Detected!' : '🎉 새 실물 NFC 스티커 감지!'}
+              </div>
+              <div className="font-mono text-sm font-black bg-white/80 px-3 py-1 rounded-xl inline-block">
+                UID: {unregisteredUid}
+              </div>
+              <p className="text-xs font-bold leading-snug">
+                {isEn
+                  ? 'Which student should this NFC charm be paired with?'
+                  : '이 스티커를 어느 어린이의 키링으로 등록할까요?'}
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                {students.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => bindStickerToStudent(s.id)}
+                    className="py-2.5 px-3 rounded-2xl bg-slate-900 text-white text-xs font-black active:scale-95 transition"
+                  >
+                    {s.avatarEmoji}{' '}
+                    {isEn ? `Pair to ${sName(s)}` : `${sName(s)} 키링으로 등록`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {readerBanner && !unregisteredUid && (
+            <div
+              className={`bubble-pop-in p-4 rounded-3xl font-black text-center ${
+                readerBanner.type === 'NO_ALIGHT_1H'
+                  ? 'bg-amber-500 text-slate-950'
+                  : readerBanner.type === 'ETA_SENT'
+                  ? 'bg-fuchsia-600 text-white'
+                  : readerBanner.type === 'BOARD'
+                  ? 'bg-emerald-500 text-white'
+                  : readerBanner.type === 'ALIGHT'
+                  ? 'bg-sky-500 text-white'
+                  : 'bg-indigo-500 text-white'
+              }`}
+            >
+              <div className="text-lg">
+                {readerBanner.type === 'NO_ALIGHT_1H'
+                  ? isEn
+                    ? `🏷️ Sent Exit-Tag Reminder for ${sName(readerBanner.student)}`
+                    : `🏷️ ${sName(readerBanner.student)} 하차 태그 확인 버블 발송`
+                  : readerBanner.type === 'ETA_SENT'
+                  ? isEn
+                    ? `📍 Auto Stop Alert Sent for ${sName(readerBanner.student)}!`
+                    : `📍 ${sName(readerBanner.student)} 정류장 접근 알림 자동 발송!`
+                  : readerBanner.type === 'BOARD'
+                  ? isEn
+                    ? `🚌 ${sName(readerBanner.student)} Boarding Confirmed!`
+                    : `🚌 ${sName(readerBanner.student)} 승차 확인!`
+                  : readerBanner.type === 'ALIGHT'
+                  ? isEn
+                    ? `🎒 ${sName(readerBanner.student)} Drop-off Confirmed!`
+                    : `🎒 ${sName(readerBanner.student)} 하차 확인!`
+                  : readerBanner.type === 'BOUND_OK'
+                  ? isEn
+                    ? `✅ Paired to ${sName(readerBanner.student)}! Tap Again!`
+                    : `✅ ${sName(readerBanner.student)} 키링 매칭 완료! 다시 찍어보세요!`
+                  : isEn
+                  ? `🙌 Already Scanned (${readerBanner.remainLabel || readerBanner.remain + 's'} left · 3m cooldown)`
+                  : `🙌 이미 찍혔어요 (${readerBanner.remainLabel || readerBanner.remain + '초'} 남음 · 3분 중복방지)`}
+              </div>
+              <div className="text-xs opacity-90 font-mono mt-0.5">
+                {formatTime(readerBanner.timeMs)}
+                {readerBanner.autoPinned
+                  ? isEn
+                    ? ' · 📌 Stop Auto-Pinned'
+                    : ' · 📌 정류장 위치 자동저장됨'
+                  : ''}
+              </div>
+            </div>
+          )}
+
+          <div className="py-2 flex flex-col items-center text-center">
+            <button
+              type="button"
+              onClick={startGalaxyNfcScanner}
+              className={`w-44 h-44 rounded-full flex flex-col items-center justify-center shadow-2xl transition active:scale-95 ${
+                nfcScanning ? 'bg-emerald-400 text-slate-950 tap-pulse' : 'bg-amber-400 text-slate-950'
+              }`}
+            >
+              <span className="text-5xl mb-1.5">{nfcScanning ? '📡' : '🏷️'}</span>
+              <span className="font-black text-sm leading-tight px-4 whitespace-pre-line">
+                {nfcScanning
+                  ? isEn
+                    ? 'NFC Ready!\nTap Backpack Charm\non Back of Phone'
+                    : 'NFC 가동중!\n가방 키링을 뒷면에\n삑! 대주세요'
+                  : isEn
+                  ? 'Tap Here to Start\nPhysical NFC'
+                  : '여기를 눌러\n실물 NFC 켜기'}
+              </span>
+            </button>
+          </div>
+
+          <div className="pt-4 border-t border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
+              <span>
+                {isEn
+                  ? '🛰️ Live Stop Distance & Quick Simulation'
+                  : '🛰️ 어린이별 정류장 실시간 거리 & 시뮬레이션'}
+              </span>
+              <button
+                onClick={() => {
+                  etaSentLockRef.current = {};
+                  showToast(
+                    isEn
+                      ? '🔄 Reset ETA lock for a fresh test run!'
+                      : '🔄 도착 알림 1회 잠금이 초기화되어 다시 테스트할 수 있습니다!'
+                  );
+                }}
+                className="text-amber-300 underline"
+              >
+                {isEn ? 'Reset Alert Lock' : '알림잠금 초기화'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {students.map((s) => {
+                const distM =
+                  busCoords && typeof s.stopLat === 'number'
+                    ? calcDistanceMeters(busCoords.lat, busCoords.lng, s.stopLat, s.stopLng)
+                    : null;
+                const alreadySent = Boolean(etaSentLockRef.current[s.id]);
+
+                return (
+                  <div key={s.id} className="p-3 rounded-2xl bg-slate-800 border border-slate-700 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-black text-white">
+                        {s.avatarEmoji} {sName(s)}
+                      </span>
+                      <span
+                        className={`font-mono text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                          distM !== null
+                            ? distM <= activePreset.radiusM
+                              ? 'bg-fuchsia-500 text-white'
+                              : 'bg-emerald-500/20 text-emerald-300'
+                            : 'bg-slate-700 text-slate-400'
+                        }`}
+                      >
+                        {formatDistanceLabel(distM, isEn)}
+                        {alreadySent ? (isEn ? ' · Sent✓' : ' · 발송됨✓') : ''}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        onClick={() => handleTagUid(s.uid, true, false)}
+                        className="py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-[11px] font-black"
+                      >
+                        {s.activeSession
+                          ? isEn
+                            ? '🎒 Tap Exit'
+                            : '🎒 하차찍기'
+                          : isEn
+                          ? '🚌 Tap Board'
+                          : '🚌 승차찍기'}
+                      </button>
+                      <button
+                        onClick={() => pinCurrentGpsToStudent(s.id)}
+                        className="py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 text-[11px] font-bold"
+                      >
+                        {isEn ? '📌 Pin Here' : '📌 현위치 정류장저장'}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        onClick={() => sendApproachingAlert(s, approachingMins, false, distM, false)}
+                        className="py-1.5 px-1 rounded-xl bg-fuchsia-600/40 hover:bg-fuchsia-600/60 text-fuchsia-200 text-[10px] font-bold"
+                      >
+                        {isEn
+                          ? `📍 ${approachingMins}m ETA Test`
+                          : `📍 ${approachingMins}분전 알림`}
+                      </button>
+                      <button
+                        onClick={() => sendNoAlightAlert(s, true, false)}
+                        className="py-1.5 px-1 rounded-xl bg-amber-500/30 hover:bg-amber-500/50 text-amber-200 text-[10px] font-bold"
+                      >
+                        {isEn
+                          ? '🏷️ 1h Tag Check'
+                          : '🏷️ 1시간 미태그 테스트'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+
+      // ======================================================================
+      // Sub-View C: School Admin Console View
+      // ======================================================================
+      const renderAdminOfficeView = () => (
+        <div className="space-y-4">
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-4 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black text-amber-950">
+                {isEn
+                  ? '☁️ Role-Separated QR Codes (Phone #1 Bus Reader · Phone #2 Parent App)'
+                  : '☁️ 버스 단말기 · 학부모 전용 QR 배포 센터'}
+              </div>
+              <p className="text-[11px] text-amber-900 mt-0.5">
+                {isEn
+                  ? 'Parent phones hide admin menus and receive private GPS ETA + NFC bubbles!'
+                  : '학부모용 QR로 접속한 폰에는 관리자 메뉴가 숨겨지고, 내 아이의 알림만 울립니다!'}
+              </p>
+            </div>
+            <button
+              onClick={() => setCloudModalOpen(true)}
+              className="px-3.5 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-black shrink-0"
+            >
+              {isEn ? 'Open QR Center' : 'QR 코드 열기'}
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl p-5 border border-slate-200 space-y-4">
+            <h3 className="font-black text-sm text-slate-900">
+              {isEn
+                ? '🏫 Register New Student & Physical NFC Charm'
+                : '🏫 새 어린이 & 실물 NFC 스티커 등록'}
+            </h3>
+            <div className="space-y-2.5">
+              <input
+                type="text"
+                value={newStuName}
+                onChange={(e) => setNewStuName(e.target.value)}
+                placeholder={isEn ? 'Student Name (e.g., Noah Kim)' : '어린이 이름 (예: 박서준)'}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold"
+              />
+              <input
+                type="text"
+                value={newStuStop}
+                onChange={(e) => setNewStuStop(e.target.value)}
+                placeholder={
+                  isEn
+                    ? 'Stop Name (GPS coordinates auto-save on 1st bus tap!)'
+                    : '정류장 이름 (위도·경도는 첫 버스 태그 시 자동 기억됩니다!)'
+                }
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold"
+              />
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  value={newStuUid}
+                  onChange={(e) => setNewStuUid(e.target.value)}
+                  placeholder={
+                    isEn
+                      ? 'NFC Sticker UID (Leave blank for auto or scan)'
+                      : 'NFC 스티커 고유번호 (비워두면 자동 또는 찍기)'
+                  }
+                  className="flex-1 px-3 py-2.5 rounded-xl border border-slate-300 font-mono text-xs uppercase"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCapturingUidForOffice(true);
+                    startGalaxyNfcScanner();
+                  }}
+                  className="px-3 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black shrink-0"
+                >
+                  {isEn ? '🏷️ Scan NFC' : '🏷️ 스티커 찍기'}
+                </button>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!newStuName.trim()) return;
+                  const cleanName = newStuName.trim();
+                  const finalUid = (newStuUid.trim() || '04:' + Math.floor(10 + Math.random() * 89) + ':AA:01').toUpperCase();
+                  const duplicateOwners = students.filter((s) => (s.uid || '').toUpperCase() === finalUid);
+
+                  if (duplicateOwners.length > 0) {
+                    const ownerNames = duplicateOwners.map((o) => sName(o)).join(', ');
+                    const ok = window.confirm(
+                      isEn
+                        ? `NFC UID (${finalUid}) is already assigned to [${ownerNames}]. Transfer it to [${cleanName}]?`
+                        : `입력하신 NFC 고유번호(${finalUid})는 이미 [${ownerNames}] 어린이에게 등록되어 있습니다.\n[${cleanName}] 어린이에게 이전할까요?`
+                    );
+                    if (!ok) return;
+                  }
+
+                  const added = {
+                    id: 'stu-' + Date.now(),
+                    schoolId,
+                    nameKo: cleanName,
+                    nameEn: cleanName,
+                    gradeKo: '신규 원생',
+                    gradeEn: 'New Student',
+                    stopKo: newStuStop.trim() || '정문 앞 정류장',
+                    stopEn: newStuStop.trim() || 'Main Gate Stop',
+                    routeId: selectedBusRouteId,
+                    stopLat: null,
+                    stopLng: null,
+                    uid: finalUid,
+                    inviteCode: 'TAP-' + Math.floor(1000 + Math.random() * 9000),
+                    keyringHex: '#34D399',
+                    avatarEmoji: '🧑🏻',
+                    activeSession: null,
+                    lastTapMs: 0
+                  };
+
+                  const cleanedPrev = students.map((s) =>
+                    (s.uid || '').toUpperCase() === finalUid
+                      ? { ...s, uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000) }
+                      : s
+                  );
+                  const nextList = [...cleanedPrev, added];
+                  setStudents(nextList);
+
+                  for (const oldStu of duplicateOwners) {
+                    await syncSingleStudentToDb({
+                      ...oldStu,
+                      uid: 'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+                    });
+                  }
+                  await syncSingleStudentToDb(added);
+
+                  setNewStuName('');
+                  setNewStuStop('');
+                  setNewStuUid('');
+                  showToast(
+                    isEn
+                      ? `✅ Registered ${added.nameEn}! Parent Invite Code: ${added.inviteCode}`
+                      : `✅ ${added.nameKo} 등록 완료! 학부모 초대코드: ${added.inviteCode}`
+                  );
+                }}
+                className="w-full py-3 rounded-2xl bg-indigo-600 text-white text-xs font-black"
+              >
+                {isEn ? '+ Register & Issue Parent Invite Code' : '+ 등록 및 학부모 초대코드 발급'}
+              </button>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 space-y-2">
+              <div className="text-xs font-black text-slate-600">
+                {isEn
+                  ? 'Active Roster · GPS Stop Status · Parent Invite Code'
+                  : '등록된 어린이 · 정류장 GPS 상태 · 부모님 초대코드'}
+              </div>
+              {students.map((s) => {
+                const isUnassigned = !s.uid || (s.uid || '').startsWith('UNASSIGNED-');
+                return (
+                  <div key={s.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs">
+                    <div className="space-y-1 min-w-0">
+                      <div className="font-black text-slate-900 truncate">
+                        {s.avatarEmoji} {sName(s)}{' '}
+                        <span className="text-slate-400 font-normal">({sStop(s)})</span>
+                      </div>
+                      <div className="font-mono text-[11px] text-slate-500 flex flex-wrap items-center gap-1">
+                        {isUnassigned ? (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-bold">
+                            {isEn ? '⚠️ No NFC Assigned' : '⚠️ NFC 미배정'}
+                          </span>
+                        ) : (
+                          <span>UID: {s.uid}</span>
+                        )}
+                        <span>·</span>
+                        {typeof s.stopLat === 'number' ? (
+                          <span className="text-emerald-600 font-bold">
+                            🛰️ GPS {s.stopLat.toFixed(4)}, {s.stopLng.toFixed(4)}
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 font-bold">
+                            {isEn ? '📌 Auto-pins on 1st tap' : '📌 첫 태그 시 위치 자동저장'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingStudent(s);
+                            setEditName(isEn ? (s.nameEn || s.nameKo) : (s.nameKo || s.nameEn));
+                            setEditStop(isEn ? (s.stopEn || s.stopKo) : (s.stopKo || s.stopEn));
+                            setEditUid(isUnassigned ? '' : s.uid);
+                            setEditResetGps(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 text-[11px] font-black"
+                        >
+                          {isEn ? '✏️ Edit' : '✏️ 정보·NFC 수정'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => pinCurrentGpsToStudent(s.id)}
+                          className="px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold"
+                        >
+                          {isEn ? '📌 Pin GPS' : '📌 현위치저장'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = window.confirm(
+                              isEn
+                                ? `Delete student [${sName(s)}] permanently?`
+                                : `[${sName(s)}] 어린이 데이터를 목록에서 완전히 삭제할까요?`
+                            );
+                            if (!ok) return;
+                            const nextList = students.filter((item) => item.id !== s.id);
+                            setStudents(nextList);
+                            await deleteStudentFromDb(s.id);
+                            showToast(
+                              isEn
+                                ? `🗑️ Deleted ${sName(s)}.`
+                                : `🗑️ ${sName(s)} 원생 데이터가 삭제되었습니다.`
+                            );
+                          }}
+                          className="px-2 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold"
+                        >
+                          {isEn ? '🗑️ Delete' : '🗑️ 삭제'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="inline-block font-mono font-black bg-amber-200 text-amber-950 px-2.5 py-1 rounded-lg">
+                        {s.inviteCode}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="min-h-screen pb-16 text-slate-800">
+          {popupLog && popupStudent && (
+            <div
+              onClick={() => setPopupLog(null)}
+              className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="bubble-pop-in w-full max-w-sm bg-white rounded-[2.2rem] overflow-hidden shadow-2xl border-4 border-white"
+              >
+                <div
+                  className={`p-6 text-center text-white bg-gradient-to-br ${
+                    popupLog.type === 'NO_ALIGHT_1H'
+                      ? 'from-amber-400 via-orange-400 to-amber-500'
+                      : popupLog.type === 'APPROACHING_10M'
+                      ? 'from-fuchsia-500 to-rose-500'
+                      : popupLog.type === 'ALIGHT'
+                      ? 'from-sky-400 to-indigo-500'
+                      : 'from-emerald-400 to-teal-500'
+                  }`}
+                >
+                  <div className="inline-block px-3 py-1 rounded-full bg-white/95 text-slate-900 text-xs font-black mb-2">
+                    {popupLog.type === 'NO_ALIGHT_1H'
+                      ? isEn
+                        ? '🏷️ Friendly Exit-Tag Reminder (1h)'
+                        : '🏷️ 하차 태그 확인 안내 (1시간 경과)'
+                      : popupLog.type === 'APPROACHING_10M'
+                      ? isEn
+                        ? `📍 Arriving in ~${popupLog.etaMinutes || 10} Mins!${popupLog.autoGps ? ' (GPS)' : ''}`
+                        : `📍 정류장 도착 약 ${popupLog.etaMinutes || 10}분 전!${popupLog.autoGps ? ' (GPS)' : ''}`
+                      : popupLog.type === 'ALIGHT'
+                      ? isEn
+                        ? '🏫 Safe Drop-off Confirmed!'
+                        : '🏫 안전 하차 완료!'
+                      : isEn
+                      ? '🚌 Boarding Confirmed!'
+                      : '🚌 승차 확인 완료!'}
+                  </div>
+                  <div className="text-6xl float-bounce my-2">{resolveQuote(popupLog).emoji}</div>
+                  <div className="text-xs font-mono font-bold bg-black/20 inline-block px-3 py-1 rounded-full">
+                    ⏰ {formatTime(popupLog.tagTimeMs)}
+                  </div>
+                </div>
+                <div className="p-5 text-center space-y-3">
+                  <div className="text-xs font-extrabold text-amber-600">
+                    {popupStudent.avatarEmoji}{' '}
+                    {isEn
+                      ? `${sName(popupStudent)} → Bubble for ${parentRelationDisplay} 💬`
+                      : `${sName(popupStudent)} 어린이 → ${parentRelationDisplay}에게 도착한 버블톡 💬`}
+                  </div>
+                  <h3 className="text-lg font-black text-slate-900 break-keep">
+                    “{resolveQuote(popupLog).title}”
+                  </h3>
+                  <p className="text-xs text-slate-500 break-keep">{resolveQuote(popupLog).sub}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPopupLog(null);
+                        setParentTab('MAP');
+                        refreshBusLocationsFromDb();
+                      }}
+                      className="py-3 rounded-2xl bg-sky-600 text-white font-black text-xs"
+                    >
+                      {isEn ? '🗺️ View Map' : '🗺️ 버스 위치 보기'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPopupLog(null)}
+                      className="py-3 rounded-2xl bg-slate-900 text-white font-black text-xs"
+                    >
+                      {isEn ? 'Got It! 💛' : '확인했어요! 💛'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {editingStudent && (
+            <div
+              onClick={() => {
+                setEditingStudent(null);
+                setCapturingUidForEdit(false);
+              }}
+              className="fixed inset-0 z-50 bg-slate-950/65 flex items-center justify-center p-4"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-3.5 shadow-2xl border-2 border-indigo-200"
+              >
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <h4 className="font-black text-sm text-slate-900">
+                    {isEn
+                      ? `✏️ Edit Student (${sName(editingStudent)})`
+                      : `✏️ 원생 정보 · NFC · 위치 수정`}
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingStudent(null);
+                      setCapturingUidForEdit(false);
+                    }}
+                    className="text-slate-400 font-bold px-1.5"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="space-y-2.5 text-left">
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-600 mb-1">
+                      {isEn ? 'Student Name' : '어린이 이름'}
+                    </label>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-600 mb-1">
+                      {isEn ? 'Bus Stop Name' : '정류장 이름'}
+                    </label>
+                    <input
+                      type="text"
+                      value={editStop}
+                      onChange={(e) => setEditStop(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-600 mb-1">
+                      {isEn ? 'NFC Sticker UID' : 'NFC 스티커 고유번호 (UID)'}
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={editUid}
+                        onChange={(e) => setEditUid(e.target.value)}
+                        placeholder={isEn ? 'Enter or Scan NFC UID' : '직접 입력 또는 스티커 찍기'}
+                        className="flex-1 px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs uppercase"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCapturingUidForEdit(true);
+                          startGalaxyNfcScanner();
+                        }}
+                        className={`px-3 py-2 rounded-xl text-xs font-black shrink-0 ${
+                          capturingUidForEdit
+                            ? 'bg-emerald-500 text-slate-950 animate-pulse'
+                            : 'bg-slate-900 text-white'
+                        }`}
+                      >
+                        {capturingUidForEdit
+                          ? isEn
+                            ? '📡 Tap Now...'
+                            : '📡 태그 대기중...'
+                          : isEn
+                          ? '🏷️ Scan'
+                          : '🏷️ 찍기'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingStudent(null);
+                      setCapturingUidForEdit(false);
+                    }}
+                    className="py-2.5 rounded-xl bg-slate-100 text-slate-600 font-black text-xs"
+                  >
+                    {isEn ? 'Cancel' : '취소'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!editName.trim()) return;
+                      const cleanName = editName.trim();
+                      const cleanStop = editStop.trim() || 'Main Gate Stop';
+                      const finalUid = (
+                        editUid.trim() ||
+                        'UNASSIGNED-' + Math.floor(1000 + Math.random() * 9000)
+                      ).toUpperCase();
+
+                      const editedObj = {
+                        ...editingStudent,
+                        nameKo: cleanName,
+                        nameEn: cleanName,
+                        stopKo: cleanStop,
+                        stopEn: cleanStop,
+                        uid: finalUid,
+                        stopLat: editResetGps ? null : editingStudent.stopLat,
+                        stopLng: editResetGps ? null : editingStudent.stopLng
+                      };
+
+                      setStudents((prev) =>
+                        prev.map((s) => (s.id === editingStudent.id ? editedObj : s))
+                      );
+                      await syncSingleStudentToDb(editedObj);
+
+                      setEditingStudent(null);
+                      setCapturingUidForEdit(false);
+                      showToast(
+                        isEn
+                          ? `✅ Updated [${cleanName}]!`
+                          : `✅ [${cleanName}] 정보가 수정되었습니다!`
+                      );
+                    }}
+                    className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs"
+                  >
+                    {isEn ? 'Save Changes' : '수정 저장하기'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {addSiblingModalOpen && (
+            <div
+              onClick={() => setAddSiblingModalOpen(false)}
+              className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl p-5 max-w-xs w-full space-y-3 text-center shadow-2xl"
+              >
+                <div className="text-2xl">👧🏻👦🏻</div>
+                <h4 className="font-black text-sm text-slate-900">
+                  {isEn ? 'Link Another Sibling’s Code' : '형제·자매 초대코드 추가 연결'}
+                </h4>
+                <input
+                  type="text"
+                  value={inviteCodeInput}
+                  onChange={(e) => setInviteCodeInput(e.target.value)}
+                  placeholder={isEn ? 'e.g., LEO-7788' : '예: LEO-7788'}
+                  className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-200 text-center font-mono font-black uppercase text-sm"
+                />
+                <button
+                  onClick={() => handleConnectChildByCode(inviteCodeInput, parentRelKey)}
+                  className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-black text-xs"
+                >
+                  {isEn ? 'Link Sibling' : '추가 연결하기'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {adminUnlockModalOpen && (
+            <div
+              onClick={() => setAdminUnlockModalOpen(false)}
+              className="fixed inset-0 z-50 bg-slate-950/65 flex items-center justify-center p-4"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl p-5 max-w-xs w-full space-y-3 text-center shadow-2xl"
+              >
+                <div className="text-2xl">🔒</div>
+                <h4 className="font-black text-sm text-slate-900">
+                  {isEn ? 'Admin Console Unlock (PIN: 1234)' : '원장님 관리자 전환 (PIN: 1234)'}
+                </h4>
+                <input
+                  type="password"
+                  value={adminPinInput}
+                  onChange={(e) => setAdminPinInput(e.target.value)}
+                  placeholder="1234"
+                  className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-200 text-center font-mono font-black text-base tracking-widest"
+                />
+                <button
+                  onClick={() => {
+                    if (adminPinInput.trim() === '1234') {
+                      setDeviceRole('ADMIN');
+                      setAdminPinInput('');
+                      setAdminUnlockModalOpen(false);
+                      showToast(
+                        isEn ? '🔓 Switched to Admin Console.' : '🔓 관리자 콘솔로 전환되었습니다.'
+                      );
+                    } else {
+                      showToast(
+                        isEn ? 'Incorrect PIN (Default: 1234)' : '비밀번호가 다릅니다 (초기 PIN: 1234)'
+                      );
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs"
+                >
+                  {isEn ? 'Unlock' : '확인'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {cloudModalOpen && (
+            <div
+              onClick={() => setCloudModalOpen(false)}
+              className="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl"
+              >
+                <div className="flex items-center justify-between border-b pb-3">
+                  <h3 className="font-black text-base text-slate-900">
+                    {isEn
+                      ? '☁️ Device QR & Cloud Sync Center'
+                      : '☁️ 기기별 전용 QR 배포 및 클라우드 연동'}
+                  </h3>
+                  <button onClick={() => setCloudModalOpen(false)} className="text-slate-400 font-bold px-2">✕</button>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-extrabold text-slate-600">
+                    1. Supabase Project URL
+                  </label>
+                  <input
+                    type="text"
+                    value={sbUrl}
+                    onChange={(e) => setSbUrl(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs"
+                  />
+                  <label className="block text-xs font-extrabold text-slate-800 pt-1">
+                    {isEn
+                      ? '2. Supabase API Key (`sb_publishable_...` or `eyJ...`)'
+                      : '2. Supabase API Key (`sb_publishable_...` 또는 `eyJ...`)'}
+                  </label>
+                  <input
+                    type="text"
+                    value={sbKey}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      setSbKey(val);
+                      localStorage.setItem('schooltap_sb_key', val);
+                    }}
+                    placeholder={
+                      isEn
+                        ? 'Paste Publishable or anon key from Supabase -> API Keys'
+                        : 'Supabase -> API Keys에서 복사한 키 붙여넣기'
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl border-2 border-emerald-400 font-mono text-xs"
+                  />
+                </div>
+
+                <label className="block space-y-1 text-xs font-bold text-slate-700">
+                  <span>{isEn ? 'School Web Push public key (VAPID)' : '학교 푸시 공개키 (VAPID Public Key)'}</span>
+                  <input type="text" value={vapidPubKey} onChange={e => setVapidPubKey(e.target.value.trim())}
+                    autoComplete="off" spellCheck={false}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono" />
+                  {vapidPubKey && !validPushPublicKey(vapidPubKey) && <span role="status">
+                    {isEn ? 'Enter the 65-byte Web Push public key.' : '서버의 Web Push 공개키 형식을 확인해 주세요.'}
+                  </span>}
+                </label>
+
+                {canShowPublicQr && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
+                      <div className="text-xs font-black text-amber-950 text-center">
+                        {isEn
+                          ? '📸 QR links automatically open in the selected language!'
+                          : '📸 전용 QR 링크로 버스 단말기와 학부모 앱을 분리 배포할 수 있습니다!'}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-center">
+                        <div className="bg-white p-3 rounded-2xl border border-slate-200">
+                          <div className="text-xs font-black text-slate-900 mb-1">
+                            {isEn ? '📲 Phone #1 (Bus Reader)' : '📲 버스 단말기 전용'}
+                          </div>
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(buildRoleUrl('READER'))}`}
+                            alt="Reader QR"
+                            className="w-32 h-32 mx-auto rounded-lg"
+                          />
+                          <button
+                            onClick={() => {
+                              safeCopyText(buildRoleUrl('READER'));
+                              showToast(
+                                isEn ? 'Copied Bus Reader URL!' : '버스 단말기 전용 링크 복사 완료!'
+                              );
+                            }}
+                            className="mt-2 w-full py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold"
+                          >
+                            {isEn ? 'Copy Reader Link' : '단말기 링크 복사'}
+                          </button>
+                        </div>
+
+                        <div className="bg-white p-3 rounded-2xl border-2 border-amber-400">
+                          <div className="text-xs font-black text-amber-700 mb-1">
+                            {isEn ? '💛 Phone #2 (Parent App)' : '💛 학부모 앱 공용'}
+                          </div>
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(buildRoleUrl('PARENT'))}`}
+                            alt="Parent QR"
+                            className="w-32 h-32 mx-auto rounded-lg"
+                          />
+                          <button
+                            onClick={() => {
+                              safeCopyText(buildRoleUrl('PARENT'));
+                              showToast(
+                                isEn ? 'Copied Parent App URL!' : '학부모 전용 앱 링크 복사 완료!'
+                              );
+                            }}
+                            className="mt-2 w-full py-1.5 rounded-lg bg-amber-400 text-slate-950 text-[11px] font-bold"
+                          >
+                            {isEn ? 'Copy Parent Link' : '학부모 앱 링크 복사'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    if (vapidPubKey && !validPushPublicKey(vapidPubKey)) {
+                      showToast(isEn ? 'Check the Web Push public key.' : '푸시 공개키 형식을 확인해 주세요.');
+                      return;
+                    }
+                    localStorage.setItem('schooltap_vapid_pub', vapidPubKey);
+                    localStorage.setItem('schooltap_sb_url', sbUrl.trim());
+                    localStorage.setItem('schooltap_sb_key', sbKey.trim());
+                    setCloudModalOpen(false);
+                    showToast(isEn ? '☁️ Settings saved!' : '☁️ 설정 저장 완료!');
+                  }}
+                  className="w-full py-3 rounded-2xl bg-emerald-600 text-white font-black text-xs"
+                >
+                  {isEn ? 'Save & Close' : '닫기'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Top Header */}
+          <header className="sticky top-0 z-30 bg-[#FFFDF7]/95 backdrop-blur border-b border-amber-200">
+            <div className="max-w-3xl mx-auto px-4 py-3 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-9 h-9 rounded-2xl bg-amber-400 flex items-center justify-center text-lg shadow-xs">🚌</span>
+                  <div>
+                    <h1 className="text-base font-black leading-none">
+                      SchoolTap™{' '}
+                      <span className="text-amber-600">
+                        {deviceRole === 'PARENT'
+                          ? isEn
+                            ? 'Parent App'
+                            : '학부모 안심톡'
+                          : deviceRole === 'READER'
+                          ? isEn
+                            ? 'Bus Reader'
+                            : '차량 단말기'
+                          : isEn
+                          ? 'Live Demo'
+                          : '통합 시제품'}
+                      </span>
+                    </h1>
+                    <span
+                      onClick={() => setCloudModalOpen(true)}
+                      className="text-[11px] text-slate-500 font-bold cursor-pointer underline decoration-dotted"
+                    >
+                      {deviceRole === 'PARENT'
+                        ? cloudStatus === 'CONNECTED'
+                          ? isEn
+                            ? '🟢 Live Bubble & GPS Alerts Active'
+                            : '🟢 실시간 안심 버블 & GPS 알림 켜짐'
+                          : isEn
+                          ? '✨ Interactive Parent Experience'
+                          : '✨ 학부모 안심 버블 체험 모드'
+                        : deviceRole === 'READER'
+                        ? isEn
+                          ? 'Auto NFC + Live GPS Geofence'
+                          : '무인 NFC 스캔 + 실시간 GPS 감시'
+                        : isEn
+                        ? 'K-8 NFC Bus Safety · Tap 🇰🇷 한국어 anytime'
+                        : 'K-8 스마트 통학 안전 · 우측 버튼으로 영어 전환'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {deviceRole === 'ADMIN' && (
+                    <button
+                      onClick={() => setCloudModalOpen(true)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border ${
+                        cloudStatus === 'CONNECTED'
+                          ? 'bg-emerald-500 border-emerald-600 text-white'
+                          : 'bg-white border-amber-300 text-slate-800'
+                      }`}
+                    >
+                      {cloudStatus === 'CONNECTED'
+                        ? isEn
+                          ? '🟢 QR Center'
+                          : '🟢 QR 배포센터'
+                        : isEn
+                        ? '☁️ QR / Cloud'
+                        : '☁️ QR · 클라우드'}
+                    </button>
+                  )}
+
+                  {deviceRole === 'READER' && (
+                    <button
+                      onClick={() => setAdminUnlockModalOpen(true)}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-200 text-slate-600 text-[11px] font-bold"
+                    >
+                      {isEn ? '🔒 Admin' : '🔒 관리자'}
+                    </button>
+                  )}
+
+                  {/* Single-button Language Switcher: English default, 1-tap toggle to Korean */}
+                  <button
+                    onClick={() => chooseLanguage(isEn ? 'ko' : 'en')}
+                    title={isEn ? 'Switch to Korean (한국어)' : 'Switch to English'}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold shadow-xs transition active:scale-95"
+                  >
+                    {isEn ? '🇰🇷 한국어' : '🇺🇸 English'}
+                  </button>
+                </div>
+              </div>
+
+              {deviceRole === 'ADMIN' && (
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={() => setAdminTab('PARENT_PREVIEW')}
+                    className={`py-2 rounded-2xl text-xs font-black border ${
+                      adminTab === 'PARENT_PREVIEW' ? 'bg-amber-400 border-amber-500 text-slate-950' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {isEn ? '💛 Parent App' : '💛 학부모 앱 화면'}
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('READER')}
+                    className={`py-2 rounded-2xl text-xs font-black border ${
+                      adminTab === 'READER' ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {isEn ? '🚌 Bus Reader' : '🚌 버스 단말기'}
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('OFFICE')}
+                    className={`py-2 rounded-2xl text-xs font-black border ${
+                      adminTab === 'OFFICE' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {isEn ? '🏫 Roster & NFC' : '🏫 원생·키링 관리'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </header>
+
+          {toast && (
+            <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-extrabold shadow-xl max-w-[92vw] text-center">
+              {toast}
+            </div>
+          )}
+
+          <main className="max-w-3xl mx-auto px-4 pt-5">
+            {deviceRole === 'PARENT'
+              ? renderDedicatedParentView()
+              : deviceRole === 'READER'
+              ? renderBusReaderView()
+              : adminTab === 'OFFICE'
+              ? renderAdminOfficeView()
+              : adminTab === 'READER'
+              ? renderBusReaderView()
+              : renderDedicatedParentView()}
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
