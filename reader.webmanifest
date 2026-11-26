@@ -1,0 +1,24 @@
+{
+  "id": "./",
+  "name": "SchoolTap",
+  "short_name": "SchoolTap",
+  "start_url": "./?role=READER",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFFDF7",
+  "theme_color": "#FBBF24",
+  "icons": [
+    {
+      "src": "./icons/schooltap-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/schooltap-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

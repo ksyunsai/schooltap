@@ -7,6 +7,18 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Keep launches online-first so site updates and live ride data stay current.
+const appPath = new URL(self.registration.scope).pathname;
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || (url.pathname !== appPath && url.pathname !== appPath + 'index.html')) return;
+  event.respondWith(fetch(event.request).catch(() => new Response(
+    'SchoolTap · Connect to the internet and reload. 인터넷에 연결한 뒤 새로고침해 주세요.',
+    { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }
+  )));
+});
+
 self.addEventListener('push', (event) => {
   let payload = {};
   try {

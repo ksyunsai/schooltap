@@ -9,36 +9,28 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="SchoolTap" />
   <title>SchoolTap™ | Smart Bus Bubble Alerts</title>
-  <!-- Dynamic PWA Manifest Injection (Home Screen App Install) -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/schooltap-180.png" />
   <script>
-    (function () {
-      try {
-        const svgIcon = encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="44" fill="#FBBF24"/><text x="96" y="128" font-size="108" text-anchor="middle">🚌</text></svg>'
-        );
-        const manifest = {
-          name: 'SchoolTap™ Smart Bus Bubble Alerts',
-          short_name: 'SchoolTap',
-          start_url: window.location.href,
-          display: 'standalone',
-          background_color: '#FFFDF7',
-          theme_color: '#FBBF24',
-          icons: [
-            {
-              src: 'data:image/svg+xml;utf8,' + svgIcon,
-              sizes: '192x192',
-              type: 'image/svg+xml',
-              purpose: 'any maskable'
-            }
-          ]
-        };
-        const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
-        const link = document.createElement('link');
-        link.rel = 'manifest';
-        link.href = URL.createObjectURL(blob);
-        document.head.appendChild(link);
-      } catch (e) {}
-    })();
+    // Capture the one-use event before the CDN scripts and React load.
+    const installState = { prompt: null, installed: false };
+    window.addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      installState.prompt = event;
+    });
+    window.addEventListener('appinstalled', () => {
+      installState.prompt = null;
+      installState.installed = true;
+    });
+
+    const launchParams = new URLSearchParams(location.search);
+    const launchRole = (launchParams.get('role') || launchParams.get('mode') || '').toLowerCase();
+    if (launchRole === 'parent' || launchRole === 'reader') {
+      document.querySelector('link[rel="manifest"]').href = './' + launchRole + '.webmanifest';
+    }
+    const schoolTapWorker = 'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => null)
+      : Promise.resolve(null);
   </script>
   <!-- Leaflet Free OpenStreetMap CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
@@ -984,32 +976,25 @@
           ? Notification.permission
           : 'unsupported'
       );
-      const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
-      const [isStandalonePwa, setIsStandalonePwa] = useState(() => {
-        try {
-          return (
-            window.matchMedia('(display-mode: standalone)').matches ||
-            window.navigator.standalone === true
-          );
-        } catch (e) {
-          return false;
-        }
-      });
+      const isInstalled = () => installState.installed ||
+        window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+      const [isStandalonePwa, setIsStandalonePwa] = useState(isInstalled);
+      const [canInstall, setCanInstall] = useState(() => Boolean(installState.prompt));
+      const [promptOpen, setPromptOpen] = useState(false);
+      const [showInstallHelp, setShowInstallHelp] = useState(false);
 
       useEffect(() => {
-        const handleBeforeInstall = (e) => {
-          e.preventDefault();
-          setDeferredInstallPrompt(e);
+        const syncInstallState = () => {
+          setIsStandalonePwa(isInstalled());
+          setCanInstall(Boolean(installState.prompt));
+          if (installState.prompt || isInstalled()) setShowInstallHelp(false);
         };
-        const handleAppInstalled = () => {
-          setDeferredInstallPrompt(null);
-          setIsStandalonePwa(true);
-        };
-        window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-        window.addEventListener('appinstalled', handleAppInstalled);
+        window.addEventListener('beforeinstallprompt', syncInstallState);
+        window.addEventListener('appinstalled', syncInstallState);
+        syncInstallState();
         return () => {
-          window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-          window.removeEventListener('appinstalled', handleAppInstalled);
+          window.removeEventListener('beforeinstallprompt', syncInstallState);
+          window.removeEventListener('appinstalled', syncInstallState);
         };
       }, []);
 
@@ -1019,13 +1004,7 @@
       const swRegRef = useRef(null);
 
       useEffect(() => {
-        if (!('serviceWorker' in navigator)) return;
-        navigator.serviceWorker
-          .register('./sw.js', { scope: './' })
-          .then((reg) => {
-            swRegRef.current = reg;
-          })
-          .catch(() => {});
+        schoolTapWorker.then((registration) => { swRegRef.current = registration; });
       }, []);
 
       const [toast, setToast] = useState('');
@@ -1287,25 +1266,71 @@
       };
 
       const triggerPwaInstall = async () => {
-        if (deferredInstallPrompt) {
-          deferredInstallPrompt.prompt();
-          const choice = await deferredInstallPrompt.userChoice;
-          if (choice?.outcome === 'accepted') {
-            setDeferredInstallPrompt(null);
-            setIsStandalonePwa(true);
-            showToast(
-              isEn
-                ? '📲 SchoolTap added to your Home Screen!'
-                : '📲 홈 화면에 SchoolTap 앱이 설치되었습니다!'
-            );
-          }
-        } else {
-          showToast(
-            isEn
-              ? '💡 Tap browser menu (⋮) → [Add to Home screen] to install as an app!'
-              : '💡 Chrome 우측 상단 [⋮ 메뉴 → 홈 화면에 추가]를 누르면 앱처럼 바로 실행됩니다!'
-          );
+        const prompt = installState.prompt;
+        if (!prompt) {
+          setShowInstallHelp(true);
+          return;
         }
+        installState.prompt = null;
+        setCanInstall(false);
+        setShowInstallHelp(false);
+        setPromptOpen(true);
+        try {
+          await prompt.prompt();
+          await prompt.userChoice;
+        } catch {
+          setShowInstallHelp(true);
+        } finally {
+          setPromptOpen(false);
+        }
+      };
+
+      const renderInstallButton = () => isStandalonePwa ? (
+        <span role="status" className="block py-2 px-2.5 rounded-xl bg-emerald-100 text-emerald-900 text-[11px] font-black text-center">
+          {isEn ? '✔ SchoolTap installed' : '✔ 스쿨탭 설치됨'}
+        </span>
+      ) : (
+        <button type="button" onClick={triggerPwaInstall} disabled={promptOpen}
+          className="py-2 px-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-black transition disabled:opacity-60">
+          {canInstall || promptOpen
+            ? (isEn ? 'Install SchoolTap' : '스쿨탭 설치')
+            : (isEn ? 'Home Screen options' : '홈 화면 추가 옵션')}
+        </button>
+      );
+
+      const renderInstallHelp = () => {
+        if (!showInstallHelp || isStandalonePwa || canInstall) return null;
+        const ua = navigator.userAgent;
+        const isAndroid = /Android/i.test(ua);
+        const isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        let help;
+        if (isIOS) {
+          help = isEn
+            ? 'Open this page in Safari. Tap Share → Add to Home Screen → Add.'
+            : 'Safari에서 이 페이지를 연 뒤, 공유 → 홈 화면에 추가 → 추가를 누르세요.';
+        } else if (isAndroid) {
+          help = isEn
+            ? 'Open this page in Chrome. Tap ⋮ → Add to Home screen → Install. In Samsung Internet, tap ☰ → Add page to → Home screen.'
+            : 'Chrome에서 ⋮ → 홈 화면에 추가 → 설치를 누르세요. 삼성 인터넷에서는 ☰ → 현재 페이지 추가 → 홈 화면을 선택하세요.';
+        } else {
+          help = isEn
+            ? 'In Chrome or Edge, use the install icon in the address bar or the app installation option in the browser menu.'
+            : 'Chrome이나 Edge에서 주소창의 설치 아이콘 또는 브라우저 메뉴의 앱 설치 항목을 선택하세요.';
+        }
+        const url = new URL(location.href);
+        const query = url.searchParams.toString();
+        const chromeIntent = 'intent://' + url.host + url.pathname + (query ? '?' + query : '') +
+          '#Intent;scheme=https;package=com.android.chrome;end';
+        return (
+          <div className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs text-amber-950 space-y-2">
+            <p role="status">{help}</p>
+            {isAndroid && url.protocol === 'https:' && (
+              <a className="inline-block rounded-lg bg-slate-900 px-3 py-2 font-bold text-white" href={chromeIntent}>
+                {isEn ? 'Open in Chrome' : 'Chrome에서 열기'}
+              </a>
+            )}
+          </div>
+        );
       };
 
       // ======================================================================
@@ -2599,6 +2624,11 @@
                   </button>
                 </form>
 
+                <div className="space-y-2">
+                  {renderInstallButton()}
+                  {renderInstallHelp()}
+                </div>
+
                 <div className="pt-3 border-t border-slate-100 space-y-2">
                   <div className="text-[11px] font-bold text-slate-400">
                     {isEn
@@ -2748,20 +2778,9 @@
                     : '🔔 상단 배너 알림 켜기'}
                 </button>
 
-                {!isStandalonePwa ? (
-                  <button
-                    type="button"
-                    onClick={triggerPwaInstall}
-                    className="py-2 px-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-black transition"
-                  >
-                    {isEn ? '📲 Add to Home Screen' : '📲 홈 화면 앱 설치'}
-                  </button>
-                ) : (
-                  <div className="py-2 px-2.5 rounded-xl bg-emerald-100 text-emerald-900 text-[11px] font-black text-center">
-                    {isEn ? '✔ Installed App' : '✔ 앱 모드 실행 중'}
-                  </div>
-                )}
+                {renderInstallButton()}
               </div>
+              {renderInstallHelp()}
             </div>
 
             {/* Child Connection Header Card */}
