@@ -32,13 +32,9 @@ self.addEventListener('push', (event) => {
 
   const title = payload.title || payload.notification?.title || '🚌 SchoolTap™ Bus Alert';
   const body = payload.body || payload.notification?.body || 'Your child’s bus ride status was updated.';
-  const tag = payload.tag || 'schooltap-push-' + Date.now();
-  const targetUrl = payload.url || payload.data?.url || './';
-
-  const svgBadge = encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#FBBF24"/><text x="64" y="88" font-size="76" text-anchor="middle">🚌</text></svg>'
-  );
-  const iconUrl = 'data:image/svg+xml;utf8,' + svgBadge;
+  const tag = payload.tag || payload.data?.event_id || 'schooltap-push-' + Date.now();
+  const targetUrl = payload.url || payload.data?.url || './?role=PARENT';
+  const iconUrl = new URL('./icons/schooltap-192.png', self.registration.scope).href;
 
   event.waitUntil(
     self.registration.showNotification(title, {
@@ -47,7 +43,6 @@ self.addEventListener('push', (event) => {
       renotify: true,
       vibrate: [220, 100, 220],
       icon: iconUrl,
-      badge: iconUrl,
       data: { url: targetUrl }
     })
   );
@@ -55,19 +50,22 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const urlToOpen = event.notification?.data?.url || './';
-
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if ('focus' in client) {
-          return client.focus();
-        }
-      }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(urlToOpen);
-      }
-      return null;
-    })
-  );
+  const scope = new URL(self.registration.scope);
+  const parentUrl = new URL('./?role=PARENT', scope);
+  let target = parentUrl;
+  try {
+    const parsed = new URL(event.notification.data?.url || parentUrl, scope);
+    if (parsed.origin === scope.origin && parsed.pathname.startsWith(scope.pathname)) target = parsed;
+  } catch {}
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const targetRole = (target.searchParams.get('role') || target.searchParams.get('mode') || 'ADMIN').toUpperCase();
+    const existing = windows.find(client => {
+      const url = new URL(client.url);
+      const role = (url.searchParams.get('role') || url.searchParams.get('mode') || 'ADMIN').toUpperCase();
+      return url.origin === scope.origin && url.pathname === target.pathname && role === targetRole;
+    });
+    if (existing) return existing.focus();
+    return self.clients.openWindow(target.href);
+  })());
 });

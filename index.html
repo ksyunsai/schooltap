@@ -190,43 +190,47 @@
       tagged_at_ms: Number(log.tagTimeMs) || Date.now()
     });
 
-    // System status-bar banner notification helper
-    const dispatchSystemBannerNotification = ({ title, body, tag, onClickFocus }) => {
+    async function activeNotificationWorker() {
+      const registration = await schoolTapWorker;
+      if (!registration) throw new Error('worker-unavailable');
+      if (registration.active) return registration;
+      let timer;
       try {
-        if (!('Notification' in window)) return false;
-        if (Notification.permission !== 'granted') return false;
+        return await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('worker-pending')), 10000); })
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
-        if ('vibrate' in navigator) {
-          try {
-            navigator.vibrate([220, 100, 220]);
-          } catch (e) {}
+    function validPushPublicKey(value) {
+      if (!/^B[A-Za-z0-9_-]{86}=?$/.test(value)) return false;
+      const bytes = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
+      return bytes.length === 65 && bytes.charCodeAt(0) === 4;
+    }
+
+    async function dispatchSystemBannerNotification({ title, body, tag, role }) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+      const options = {
+        body, tag, renotify: Boolean(tag), vibrate: [220, 100, 220],
+        icon: new URL('./icons/schooltap-192.png', location.href).href,
+        data: { url: role === 'PARENT' ? './?role=PARENT' : './' }
+      };
+      try {
+        if ('serviceWorker' in navigator) {
+          const registration = await activeNotificationWorker();
+          await registration.showNotification(title, options);
+        } else {
+          const notification = new Notification(title, options);
+          notification.onclick = () => { window.focus(); notification.close(); };
         }
-
-        const svgBadge = encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#FBBF24"/><text x="64" y="88" font-size="76" text-anchor="middle">🚌</text></svg>'
-        );
-
-        const notif = new Notification(title, {
-          body,
-          tag: tag || 'schooltap-alert-' + Date.now(),
-          renotify: true,
-          requireInteraction: false,
-          icon: 'data:image/svg+xml;utf8,' + svgBadge,
-          badge: 'data:image/svg+xml;utf8,' + svgBadge
-        });
-
-        notif.onclick = () => {
-          try {
-            window.focus();
-            if (typeof onClickFocus === 'function') onClickFocus();
-            notif.close();
-          } catch (e) {}
-        };
         return true;
-      } catch (e) {
+      } catch {
         return false;
       }
-    };
+    }
 
     // Haversine distance calculation (meters)
     const calcDistanceMeters = (lat1, lng1, lat2, lng2) => {
@@ -998,13 +1002,26 @@
         };
       }, []);
 
-      const [vapidPubKey, setVapidPubKey] = useState(() => localStorage.getItem('schooltap_vapid_pub') || '');
-      const [pushSubJson, setPushSubJson] = useState(() => localStorage.getItem('schooltap_push_sub') || '');
-      const [pushSyncStatus, setPushSyncStatus] = useState('');
-      const swRegRef = useRef(null);
-
+      const [vapidPubKey, setVapidPubKey] = useState(() => {
+        const shared = (params.get('vapid') || '').trim();
+        if (validPushPublicKey(shared)) localStorage.setItem('schooltap_vapid_pub', shared);
+        return localStorage.getItem('schooltap_vapid_pub') || '';
+      });
+      const [pushSyncStatus, setPushSyncStatus] = useState('idle');
+      const [pushRetry, setPushRetry] = useState(0);
+      const pushWork = useRef(Promise.resolve());
+      const unlinkInProgress = useRef(false);
+      const [sampleStatus, setSampleStatus] = useState('');
       useEffect(() => {
-        schoolTapWorker.then((registration) => { swRegRef.current = registration; });
+        const refresh = () => {
+          if ('Notification' in window) setNotifPermission(Notification.permission);
+        };
+        window.addEventListener('focus', refresh);
+        document.addEventListener('visibilitychange', refresh);
+        return () => {
+          window.removeEventListener('focus', refresh);
+          document.removeEventListener('visibilitychange', refresh);
+        };
       }, []);
 
       const [toast, setToast] = useState('');
@@ -1012,110 +1029,6 @@
         setToast(msg);
         setTimeout(() => setToast((prev) => (prev === msg ? '' : prev)), 3600);
       }, []);
-
-      const savePushSubscriptionToCloud = useCallback(
-        async (subObj, inviteCodesList) => {
-          const client = sbClientRef.current;
-          if (!client || !subObj) return false;
-          const codes = Array.isArray(inviteCodesList) && inviteCodesList.length > 0
-            ? inviteCodesList
-            : parentLinkedCodes;
-          if (!codes || codes.length === 0) return false;
-
-          try {
-            const rows = codes.map((code) => ({
-              id: `sub-${schoolId}-${code}-${String(subObj.endpoint || '').slice(-16)}`,
-              school_id: schoolId,
-              invite_code: String(code).trim().toUpperCase(),
-              endpoint: subObj.endpoint,
-              subscription_json: subObj,
-              paused_date: isPausedToday ? getTodayKstDateStr() : null,
-              updated_at: new Date().toISOString()
-            }));
-            const { error } = await client
-              .from('schooltap_push_subscriptions')
-              .upsert(rows, { onConflict: 'id' });
-            if (!error) {
-              setPushSyncStatus(isEn ? '🟢 Push DB Saved' : '🟢 푸시 구독 DB 저장됨');
-              return true;
-            }
-          } catch (e) {}
-
-          setPushSyncStatus(isEn ? '🟡 Local Subscribed' : '🟡 로컬 구독 완료');
-          return false;
-        },
-        [parentLinkedCodes, schoolId, isPausedToday, isEn]
-      );
-
-      const subscribeBackgroundPush = useCallback(
-        async (vapidPublicKeyOpt = '') => {
-          const keyToUse = (vapidPublicKeyOpt || vapidPubKey || localStorage.getItem('schooltap_vapid_pub') || '').trim();
-          if (keyToUse) {
-            setVapidPubKey(keyToUse);
-            localStorage.setItem('schooltap_vapid_pub', keyToUse);
-          }
-          if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-            showToast(
-              isEn
-                ? '⚠️ PushManager not supported in this browser.'
-                : '⚠️ 이 브라우저에서는 백그라운드 푸시 구독을 지원하지 않습니다.'
-            );
-            return null;
-          }
-          try {
-            const reg = swRegRef.current || (await navigator.serviceWorker.ready);
-            swRegRef.current = reg;
-            let sub = await reg.pushManager.getSubscription();
-            if (!sub && keyToUse) {
-              const padding = '='.repeat((4 - (keyToUse.length % 4)) % 4);
-              const base64 = (keyToUse + padding).replace(/-/g, '+').replace(/_/g, '/');
-              const rawData = window.atob(base64);
-              const outputArray = new Uint8Array(rawData.length);
-              for (let i = 0; i < rawData.length; ++i) {
-                outputArray[i] = rawData.charCodeAt(i);
-              }
-              sub = await reg.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: outputArray
-              });
-            }
-            if (sub) {
-              const serialized = JSON.stringify(sub);
-              setPushSubJson(serialized);
-              localStorage.setItem('schooltap_push_sub', serialized);
-              await savePushSubscriptionToCloud(sub.toJSON ? sub.toJSON() : JSON.parse(serialized));
-              return serialized;
-            } else if (!keyToUse) {
-              showToast(
-                isEn
-                  ? '💡 Enter VAPID Public Key in settings to register server Web Push.'
-                  : '💡 서버 푸시(Web Push) 구독을 위해 VAPID 공개키를 입력해 주세요.'
-              );
-            }
-          } catch (err) {
-            showToast(
-              isEn
-                ? `⚠️ Push subscribe note: ${err.message}`
-                : `⚠️ 푸시 구독 안내: ${err.message}`
-            );
-          }
-          return null;
-        },
-        [vapidPubKey, savePushSubscriptionToCloud, isEn, showToast]
-      );
-
-      const invokePushEdgeFunction = useCallback(
-        async (logObj) => {
-          const client = sbClientRef.current;
-          if (!client || !logObj) return;
-          try {
-            await client.functions.invoke('send-schooltap-push', {
-              body: { record: mapLogToDb(logObj, schoolId) }
-            });
-          } catch (e) {}
-        },
-        [schoolId]
-      );
 
       const [nfcScanning, setNfcScanning] = useState(false);
       const [wakeLockActive, setWakeLockActive] = useState(false);
@@ -1171,6 +1084,7 @@
             await client
               .from('schooltap_push_subscriptions')
               .update({ paused_date: nextPausedDate || null, updated_at: new Date().toISOString() })
+              .eq('school_id', schoolId)
               .in('invite_code', parentLinkedCodes);
           } catch (e) {}
         }
@@ -1220,49 +1134,72 @@
         [lang, isEn, vehicleName]
       );
 
-      const requestSystemNotificationPermission = async (sendSample = false) => {
+      const requestSystemNotificationPermission = async () => {
         if (!('Notification' in window)) {
-          showToast(
-            isEn
-              ? '⚠️ This browser does not support system banner notifications.'
-              : '⚠️ 현재 브라우저는 상단 배너 알림을 지원하지 않습니다. Chrome으로 열어주세요!'
-          );
-          return false;
+          setSampleStatus('unsupported');
+          return;
         }
         try {
-          const perm = await Notification.requestPermission();
-          setNotifPermission(perm);
-          if (perm === 'granted') {
-            subscribeBackgroundPush();
-            playChime('BOARD', soundMuted);
-            if (sendSample && !isPausedToday) {
-              dispatchSystemBannerNotification({
-                title: isEn
-                  ? '🚌 SchoolTap System Banner Ready!'
-                  : '🚌 SchoolTap 상단 배너 알림이 켜졌습니다!',
-                body: isEn
-                  ? 'Boarding, drop-off, and bus-approaching alerts will now pop up in your phone notification bar.'
-                  : '이제 다른 앱을 보거나 화면을 내려두어도 상단 알림창에 버블 배너가 울립니다 💛',
-                tag: 'schooltap-test-' + Date.now()
-              });
-            }
-            showToast(
-              isEn
-                ? '🔔 System banner notifications enabled!'
-                : '🔔 상단 배너 알림 권한이 허용되었습니다!'
-            );
-            return true;
-          } else {
-            showToast(
-              isEn
-                ? '❌ Notification permission blocked. Please allow it in browser site settings.'
-                : '❌ 알림이 차단되었습니다. 브라우저 주소창 자물쇠 아이콘 → [권한 → 알림 허용]을 켜주세요!'
-            );
-            return false;
+          const permission = Notification.permission === 'default'
+            ? await Notification.requestPermission() : Notification.permission;
+          setNotifPermission(permission);
+          if (permission !== 'granted') {
+            setSampleStatus(permission === 'denied' ? 'blocked' : 'dismissed');
+            return;
           }
-        } catch (e) {
-          return false;
+          setSampleStatus('sending');
+          setPushRetry(value => value + 1);
+          const sent = await dispatchSystemBannerNotification({
+            title: isEn ? 'SchoolTap test notification' : '스쿨탭 테스트 알림',
+            body: isEn ? 'This notification is from SchoolTap on this phone.' : '이 휴대폰에서 보낸 스쿨탭 알림입니다.',
+            tag: 'schooltap-test', role: deviceRole
+          });
+          setSampleStatus(sent ? 'sent' : 'failed');
+        } catch {
+          setSampleStatus('failed');
         }
+      };
+
+      const renderNotificationTest = () => (
+        <button type="button" onClick={requestSystemNotificationPermission} disabled={sampleStatus === 'sending'}
+          className="py-2 px-2.5 rounded-xl bg-slate-900 text-white text-[11px] font-black disabled:opacity-60">
+          {notifPermission === 'granted'
+            ? (isEn ? 'Send test notification' : '테스트 알림 보내기')
+            : (isEn ? 'Enable & test notifications' : '알림 허용·테스트')}
+        </button>
+      );
+
+      const renderNotificationStatus = () => {
+        const sample = {
+          unsupported: ['Open SchoolTap in a browser that supports notifications.', '알림을 지원하는 Chrome이나 설치한 스쿨탭에서 열어주세요.'],
+          blocked: ['Notifications are blocked. Allow notifications for SchoolTap in app or browser settings.', '알림이 차단됐습니다. 휴대폰의 스쿨탭 또는 Chrome 사이트 설정에서 알림을 허용해 주세요.'],
+          dismissed: ['Permission was not granted. Tap the button again and choose Allow.', '권한을 허용하지 않았습니다. 버튼을 다시 누르고 허용을 선택해 주세요.'],
+          sending: ['Sending to this phone…', '이 휴대폰에 테스트 알림을 보내는 중입니다.'],
+          sent: ['Test sent to this phone. Check the notification shade.', '휴대폰에 테스트 알림을 요청했습니다. 화면 상단을 내려 알림창을 확인해 주세요.'],
+          failed: ['Could not display a notification. Reopen SchoolTap and check app notification settings.', '알림을 표시하지 못했습니다. 스쿨탭을 다시 열고 휴대폰 앱 알림 설정을 확인해 주세요.']
+        };
+        const push = {
+          idle: ['Allow notifications to connect ride alerts.', '알림을 허용하면 승하차 푸시를 연결할 수 있어요.'],
+          child: ['Open the school’s parent link and link your child to receive ride alerts.', '실제 승하차 알림은 학교의 학부모 링크로 접속해 아이를 연결하면 받을 수 있어요.'],
+          cloud: ['Open the parent QR link with school cloud settings.', '학교 서버 연결이 필요합니다. 관리자 화면에서 발급한 학부모 QR 링크로 접속해 주세요.'],
+          key: ['The school’s Web Push public key is missing. Use an updated parent QR link.', '학교의 푸시 공개키가 없습니다. 관리자가 공개키를 저장한 뒤 새 학부모 QR 링크로 접속해 주세요.'],
+          syncing: ['Registering this phone with the school…', '학교 서버에 이 휴대폰을 등록하는 중입니다.'],
+          registered: ['This phone is registered for ride notifications.', '학교 서버에 이 휴대폰의 승하차 푸시가 등록됐습니다.'],
+          rejected: ['The school server did not save this subscription. Tap the test button to retry.', '학교 서버에 푸시 구독을 저장하지 못했습니다. 테스트 버튼을 눌러 다시 시도해 주세요.'],
+          unsupported: ['This browser does not support background push.', '이 브라우저에서는 앱을 닫은 뒤 푸시를 받을 수 없습니다.'],
+          failed: ['Could not register this phone for background push. Check the school’s public key and retry.', '휴대폰의 푸시 구독에 실패했습니다. 학교의 푸시 공개키를 확인하고 다시 시도해 주세요.']
+        };
+        const i = isEn ? 0 : 1;
+        const test = notifPermission === 'denied' ? 'blocked' : sampleStatus;
+        const status = notifPermission !== 'granted' ? 'idle'
+          : !parentLinkedCodes.length ? 'child' : !sbUrl || !sbKey ? 'cloud' : pushSyncStatus;
+        return (
+          <div role="status" aria-live="polite" className="space-y-1 text-[11px] text-slate-700">
+            {sample[test] && <p>{sample[test][i]}</p>}
+            <p><strong>{isEn ? 'Ride notifications · ' : '승하차 푸시 · '}</strong>{push[status][i]}</p>
+            {isPausedToday && <p>{isEn ? 'Ride alerts are muted today.' : '오늘 승하차 알림이 일시정지되어 있습니다.'}</p>}
+          </div>
+        );
       };
 
       const triggerPwaInstall = async () => {
@@ -1400,8 +1337,15 @@
               .from('schooltap_ride_logs')
               .insert(payload);
             if (!error) {
-              setLastTxDebug(isEn ? '🟢 Alert Sent OK' : '🟢 실시간 전송 OK');
-              invokePushEdgeFunction(logObj);
+              setLastTxDebug(isEn ? 'Ride saved · requesting push…' : '승하차 기록 저장 · 푸시 요청 중');
+              const { data, error: pushError } = await client.functions.invoke('send-schooltap-push', { body: { record: payload } });
+              if (pushError || data?.error || data?.ok === false || data?.success === false) {
+                setLastTxDebug(isEn ? 'Ride saved · push request failed' : '승하차 기록 저장 · 서버 푸시 요청 실패');
+              } else if (data?.sent === 0) {
+                setLastTxDebug(isEn ? 'Ride saved · no push sent' : '승하차 기록 저장 · 푸시 발송 0건');
+              } else {
+                setLastTxDebug(isEn ? 'Ride saved · push request accepted' : '승하차 기록 저장 · 푸시 요청 접수');
+              }
             } else {
               setLastTxDebug(`🔴 Log Err: ${error.message}`);
             }
@@ -1409,7 +1353,7 @@
             setLastTxDebug(`🔴 Net Err: ${err.message}`);
           }
         },
-        [schoolId, isEn, invokePushEdgeFunction]
+        [schoolId, isEn]
       );
 
       const publishBusLocationToDb = useCallback(
@@ -1499,6 +1443,38 @@
         studentsRef.current = students;
       }, [students]);
 
+      const showRideAlert = useCallback((log) => {
+        setPopupLog(log);
+        const targetKid = studentsRef.current.find((s) => s.id === log.studentId);
+        const kidDisplay = targetKid
+          ? sName(targetKid)
+          : log.studentName || (isEn ? 'Your child' : '우리 아이');
+        const q = resolveQuote(log);
+        const badgeTitle =
+          log.type === 'NO_ALIGHT_1H'
+            ? isEn
+              ? `🏷️ [${kidDisplay}] Exit Tap Missed — Please Check In`
+              : `🏷️ [${kidDisplay}] 하차 태그를 잊은 것 같아요`
+            : log.type === 'APPROACHING_10M'
+            ? isEn
+              ? `📍 [${kidDisplay}] Bus Arriving in ~${log.etaMinutes || 10}m`
+              : `📍 [${kidDisplay}] 정류장 도착 약 ${log.etaMinutes || 10}분 전`
+            : log.type === 'ALIGHT'
+            ? isEn
+              ? `🏫 [${kidDisplay}] Safe Drop-off Confirmed`
+              : `🏫 [${kidDisplay}] 안전 하차 완료`
+            : isEn
+            ? `🚌 [${kidDisplay}] Boarding Confirmed`
+            : `🚌 [${kidDisplay}] 버스 승차 완료`;
+
+        dispatchSystemBannerNotification({
+          title: badgeTitle,
+          body: `${q.emoji} ${q.title}`,
+          tag: log.id,
+          role: deviceRole
+        });
+      }, [sName, isEn, resolveQuote, deviceRole]);
+
       const handleIncomingRideLog = useCallback(
         (rawRow, isHistory = false) => {
           if (!rawRow || !rawRow.id) return;
@@ -1553,36 +1529,7 @@
               if (incomingLog.type !== 'NO_ALIGHT_1H') {
                 playChime(incomingLog.type, soundMuted);
               }
-              setPopupLog(incomingLog);
-
-              const targetKid = studentsRef.current.find((s) => s.id === incomingLog.studentId);
-              const kidDisplay = targetKid
-                ? sName(targetKid)
-                : incomingLog.studentName || (isEn ? 'Your child' : '우리 아이');
-              const q = resolveQuote(incomingLog);
-              const badgeTitle =
-                incomingLog.type === 'NO_ALIGHT_1H'
-                  ? isEn
-                    ? `🏷️ [${kidDisplay}] Exit Tap Missed — Please Check In`
-                    : `🏷️ [${kidDisplay}] 하차 태그를 잊은 것 같아요`
-                  : incomingLog.type === 'APPROACHING_10M'
-                  ? isEn
-                    ? `📍 [${kidDisplay}] Bus Arriving in ~${incomingLog.etaMinutes || 10}m`
-                    : `📍 [${kidDisplay}] 정류장 도착 약 ${incomingLog.etaMinutes || 10}분 전`
-                  : incomingLog.type === 'ALIGHT'
-                  ? isEn
-                    ? `🏫 [${kidDisplay}] Safe Drop-off Confirmed`
-                    : `🏫 [${kidDisplay}] 안전 하차 완료`
-                  : isEn
-                  ? `🚌 [${kidDisplay}] Boarding Confirmed`
-                  : `🚌 [${kidDisplay}] 버스 승차 완료`;
-
-              dispatchSystemBannerNotification({
-                title: badgeTitle,
-                body: `${q.emoji} ${q.title}`,
-                tag: incomingLog.id,
-                onClickFocus: () => setPopupLog(incomingLog)
-              });
+              showRideAlert(incomingLog);
             }
           }
         },
@@ -1593,9 +1540,7 @@
           approachingEnabled,
           tapBubbleEnabled,
           soundMuted,
-          sName,
-          isEn,
-          resolveQuote
+          showRideAlert
         ]
       );
 
@@ -1714,18 +1659,37 @@
             : `💛 [${sName(matched)}] 어린이의 ${relTxt} 휴대폰으로 연결되었습니다!`
         );
 
-        if ('Notification' in window && Notification.permission === 'default') {
-          requestSystemNotificationPermission(false);
-        }
         return true;
       };
 
       const handleDisconnectParent = async () => {
+        if (unlinkInProgress.current) return;
+        unlinkInProgress.current = true;
+        const client = sbClientRef.current;
+        try {
+          await pushWork.current;
+          const reg = await schoolTapWorker;
+          const sub = await reg?.pushManager?.getSubscription();
+          if (sub) {
+            await sub.unsubscribe();
+            if (await reg.pushManager.getSubscription()) throw new Error('still-subscribed');
+            if (client) {
+              await client.from('schooltap_push_subscriptions').delete()
+                .eq('school_id', schoolId).eq('endpoint', sub.endpoint);
+            }
+          }
+        } catch {
+          showToast(isEn ? 'Could not finish unlinking push. Reconnect and try again.' : '푸시 연결 해제를 마치지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.');
+          unlinkInProgress.current = false;
+          return;
+        }
         setParentLinkedCodes([]);
         localStorage.removeItem('schooltap_parent_codes');
+        localStorage.removeItem('schooltap_push_sub');
         setPopupLog(null);
+        setPushSyncStatus('idle');
+        unlinkInProgress.current = false;
 
-        const client = sbClientRef.current;
         if (client) {
           try {
             await fetchFreshStudentsFromDb(client, null);
@@ -1984,6 +1948,45 @@
         };
       }, [sbUrl, sbKey, deviceRole, schoolId, linkedCodesKey, handleIncomingRideLog]);
 
+      useEffect(() => {
+        let cancelled = false;
+        const sync = async () => {
+          if (cancelled || unlinkInProgress.current || notifPermission !== 'granted' || deviceRole === 'READER' || !parentLinkedCodes.length) return;
+          const client = sbClientRef.current;
+          if (!client) { setPushSyncStatus('cloud'); return; }
+          if (!('PushManager' in window) || !('serviceWorker' in navigator)) {
+            setPushSyncStatus('unsupported'); return;
+          }
+          setPushSyncStatus('syncing');
+          try {
+            const reg = await activeNotificationWorker();
+            let sub = await reg.pushManager.getSubscription();
+            if (cancelled) return;
+            if (!sub) {
+              if (!validPushPublicKey(vapidPubKey)) { setPushSyncStatus('key'); return; }
+              const raw = atob(vapidPubKey.replace(/-/g, '+').replace(/_/g, '/'));
+              sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: Uint8Array.from(raw, char => char.charCodeAt(0))
+              });
+            }
+            if (cancelled) return;
+            const json = sub.toJSON();
+            const rows = parentLinkedCodes.map(code => ({
+              id: `sub-${schoolId}-${code}-${sub.endpoint.slice(-16)}`,
+              school_id: schoolId, invite_code: code, endpoint: sub.endpoint, subscription_json: json,
+              paused_date: isPausedToday ? getTodayKstDateStr() : null, updated_at: new Date().toISOString()
+            }));
+            const { error } = await client.from('schooltap_push_subscriptions').upsert(rows, { onConflict: 'id' });
+            if (!cancelled) setPushSyncStatus(error ? 'rejected' : 'registered');
+          } catch {
+            if (!cancelled) setPushSyncStatus('failed');
+          }
+        };
+        pushWork.current = pushWork.current.then(sync);
+        return () => { cancelled = true; };
+      }, [notifPermission, deviceRole, schoolId, parentLinkedCodes, sbUrl, sbKey, vapidPubKey, isPausedToday, pushRetry]);
+
       // Approaching ETA Alert Helper
       const sendApproachingAlert = useCallback(
         (stu, customEtaMins, autoTriggered = false, distMeters = null, triggerPopup = false) => {
@@ -2021,8 +2024,8 @@
             timeMs: nowMs
           });
 
-          if (triggerPopup && !isPausedToday) {
-            setPopupLog(etaLog);
+          if (triggerPopup && !isPausedToday && approachingEnabled) {
+            showRideAlert(etaLog);
           }
 
           showToast(
@@ -2035,6 +2038,8 @@
           currentStudent,
           students,
           activePreset,
+          approachingEnabled,
+          showRideAlert,
           approachingMins,
           schoolId,
           currentBusObj,
@@ -2084,7 +2089,7 @@
           });
 
           if (triggerPopup && !isPausedToday) {
-            setPopupLog(alertLog);
+            showRideAlert(alertLog);
           }
 
           showToast(
@@ -2093,7 +2098,7 @@
               : `🏷️ [${sName(target)}] 학부모님께 하차 태그 확인 안내 버블을 보냈습니다.`
           );
         },
-        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, isPausedToday, showToast]
+        [currentStudent, students, schoolId, currentBusObj, insertRideLogToDb, isEn, sName, isPausedToday, showRideAlert, showToast]
       );
 
       useEffect(() => {
@@ -2435,7 +2440,7 @@
           );
 
           if (showImmediateBubble && !isPausedToday && tapBubbleEnabled) {
-            setPopupLog(newLog);
+            showRideAlert(newLog);
           }
 
           if (shouldAutoPin) {
@@ -2469,6 +2474,7 @@
           sName,
           isPausedToday,
           tapBubbleEnabled,
+          showRideAlert,
           showToast
         ]
       );
@@ -2532,6 +2538,9 @@
 
       const buildRoleUrl = (roleType, inviteCodeOpt = '') => {
         let u = `${effectiveBaseUrl}?role=${roleType}&schoolId=${encodeURIComponent(schoolId)}&lang=${lang}&sbUrl=${encodeURIComponent(sbUrl)}&sbKey=${encodeURIComponent(sbKey)}`;
+        if (roleType === 'PARENT' && validPushPublicKey(vapidPubKey)) {
+          u += '&vapid=' + encodeURIComponent(vapidPubKey);
+        }
         if (inviteCodeOpt) {
           u += `&invite=${encodeURIComponent(inviteCodeOpt)}`;
         }
@@ -2625,7 +2634,8 @@
                 </form>
 
                 <div className="space-y-2">
-                  {renderInstallButton()}
+                  <div className="grid grid-cols-2 gap-2">{renderNotificationTest()}{renderInstallButton()}</div>
+                  {renderNotificationStatus()}
                   {renderInstallHelp()}
                 </div>
 
@@ -2728,58 +2738,12 @@
 
             {/* System Top-Bar Notification & PWA App Install Card */}
             <div className="bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-100 rounded-3xl p-4 border-2 border-amber-300 space-y-2.5 shadow-xs">
-              <div className="flex items-start justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-black text-amber-950 flex items-center gap-1.5">
-                    <span>📲</span>
-                    <span>
-                      {notifPermission === 'granted'
-                        ? isEn
-                          ? 'Background Top-Bar Alerts Active'
-                          : '상단 배너 시스템 알림 활성화됨'
-                        : isEn
-                        ? 'Install as App & Enable Phone Banner Alerts'
-                        : '홈 화면 앱 설치 및 상단 배너 알림 켜기'}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-amber-900 leading-snug break-keep">
-                    {notifPermission === 'granted'
-                      ? isEn
-                        ? 'Alerts will appear in your phone status bar even while using other apps.'
-                        : '브라우저를 내려두거나 다른 앱을 보셔도 휴대폰 상단 상태바에 배너와 진동이 울립니다.'
-                      : isEn
-                      ? 'Add SchoolTap to your Home Screen like a native app & allow status-bar bubble alerts.'
-                      : '아래 버튼을 눌러 시스템 알림을 허용하고 홈 화면에 추가하면 앱처럼 배너 알림을 받을 수 있어요.'}
-                  </p>
-                </div>
-                {notifPermission === 'granted' && (
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black shrink-0">
-                    ON
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => requestSystemNotificationPermission(true)}
-                  className={`py-2 px-2.5 rounded-xl text-[11px] font-black transition ${
-                    notifPermission === 'granted'
-                      ? 'bg-white border border-amber-300 text-amber-950 hover:bg-amber-50'
-                      : 'bg-slate-900 text-white shadow-xs'
-                  }`}
-                >
-                  {notifPermission === 'granted'
-                    ? isEn
-                      ? '🔔 Test Top Banner'
-                      : '🔔 상단 배너 테스트'
-                    : isEn
-                    ? '🔔 Allow Banner Alerts'
-                    : '🔔 상단 배너 알림 켜기'}
-                </button>
-
+              <h2 className="text-xs font-black text-amber-950">{isEn ? 'Phone notifications' : '휴대폰 알림'}</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {renderNotificationTest()}
                 {renderInstallButton()}
               </div>
+              {renderNotificationStatus()}
               {renderInstallHelp()}
             </div>
 
@@ -4065,6 +4029,16 @@
                   />
                 </div>
 
+                <label className="block space-y-1 text-xs font-bold text-slate-700">
+                  <span>{isEn ? 'School Web Push public key (VAPID)' : '학교 푸시 공개키 (VAPID Public Key)'}</span>
+                  <input type="text" value={vapidPubKey} onChange={e => setVapidPubKey(e.target.value.trim())}
+                    autoComplete="off" spellCheck={false}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono" />
+                  {vapidPubKey && !validPushPublicKey(vapidPubKey) && <span role="status">
+                    {isEn ? 'Enter the 65-byte Web Push public key.' : '서버의 Web Push 공개키 형식을 확인해 주세요.'}
+                  </span>}
+                </label>
+
                 {canShowPublicQr && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
@@ -4124,6 +4098,11 @@
 
                 <button
                   onClick={() => {
+                    if (vapidPubKey && !validPushPublicKey(vapidPubKey)) {
+                      showToast(isEn ? 'Check the Web Push public key.' : '푸시 공개키 형식을 확인해 주세요.');
+                      return;
+                    }
+                    localStorage.setItem('schooltap_vapid_pub', vapidPubKey);
                     localStorage.setItem('schooltap_sb_url', sbUrl.trim());
                     localStorage.setItem('schooltap_sb_key', sbKey.trim());
                     setCloudModalOpen(false);
