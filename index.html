@@ -29,6 +29,7 @@
       document.querySelector('link[rel="manifest"]').href = './' + launchRole + '.webmanifest';
     }
   </script>
+  <script src="./push-config.js"></script>
   <script src="./notification-receiver.js?rev=locale-2"></script>
   <script src="./ride-messages.js?rev=ride-copy-3"></script>
   <script src="./ride-alerts.js?rev=ride-copy-3"></script>
@@ -194,6 +195,56 @@
       if (!/^B[A-Za-z0-9_-]{86}=?$/.test(value)) return false;
       const bytes = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
       return bytes.length === 65 && bytes.charCodeAt(0) === 4;
+    }
+
+    function pushProject(url) {
+      return (url || '').trim().replace(/\/+$/, '');
+    }
+
+    function projectPushStorageKey(project) {
+      return 'schooltap_vapid_pub:' + pushProject(project);
+    }
+
+    function builtInPushKey(project) {
+      const key = window.SchoolTapPushConfig?.publicKey;
+      return pushProject(project) === DEFAULT_SUPABASE_URL && validPushPublicKey(key) ? key : '';
+    }
+
+    function readProjectPushKey(project) {
+      const key = localStorage.getItem(projectPushStorageKey(project));
+      return validPushPublicKey(key) ? key : '';
+    }
+
+    async function preparePushSubscription(manager, publicKey, removeOldEndpoint, canRegister) {
+      let sub = await manager.getSubscription();
+      const raw = validPushPublicKey(publicKey)
+        ? Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0))
+        : null;
+      if (!canRegister()) return { status: 'idle' };
+      if (sub) {
+        const bound = sub.options?.applicationServerKey;
+        if (!bound || !raw) return { sub, status: 'unverified' };
+        const bytes = new Uint8Array(bound);
+        if (bytes.length === raw.length && bytes.every((value, i) => value === raw[i])) {
+          return { sub, status: 'registered' };
+        }
+        // A correctly sized but invalid curve point would make subscribe() fail after unlinking.
+        try {
+          await crypto.subtle.importKey('raw', raw, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+        } catch {
+          return { status: 'invalidKey' };
+        }
+        if (!canRegister()) return { status: 'idle' };
+        // Remove obsolete rows before replacing the device subscription. A failed cleanup can then be retried.
+        if (!await removeOldEndpoint(sub.endpoint)) return { status: 'rejected' };
+        if (!canRegister()) return { status: 'idle' };
+        await sub.unsubscribe();
+        if (await manager.getSubscription()) return { status: 'failed' };
+      }
+      if (!raw) return { status: 'key' };
+      if (!canRegister()) return { status: 'idle' };
+      sub = await manager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+      return { sub, status: 'registered' };
     }
 
     async function dispatchSystemBannerNotification({ title, body, tag, lang, role }) {
@@ -863,6 +914,14 @@
 
       // Supabase cloud connection info
       const [sbUrl, setSbUrl] = useState(() => {
+        const previousProject = localStorage.getItem('schooltap_sb_url') || DEFAULT_SUPABASE_URL;
+        const legacyKey = localStorage.getItem('schooltap_vapid_pub');
+        if (legacyKey !== null) {
+          if (validPushPublicKey(legacyKey) && !readProjectPushKey(previousProject)) {
+            localStorage.setItem(projectPushStorageKey(previousProject), legacyKey);
+          }
+          localStorage.removeItem('schooltap_vapid_pub');
+        }
         const u = params.get('sbUrl');
         if (u) localStorage.setItem('schooltap_sb_url', u);
         return u || localStorage.getItem('schooltap_sb_url') || DEFAULT_SUPABASE_URL;
@@ -1003,11 +1062,19 @@
         };
       }, []);
 
-      const [vapidPubKey, setVapidPubKey] = useState(() => {
+      const project = pushProject(sbUrl);
+      const builtInKey = builtInPushKey(project);
+      const [savedProjectKey, setSavedProjectKey] = useState(() => {
         const shared = (params.get('vapid') || '').trim();
-        if (validPushPublicKey(shared)) localStorage.setItem('schooltap_vapid_pub', shared);
-        return localStorage.getItem('schooltap_vapid_pub') || '';
+        if (!builtInKey && validPushPublicKey(shared)) {
+          localStorage.setItem(projectPushStorageKey(project), shared);
+        }
+        return { project, key: readProjectPushKey(project) };
       });
+      const vapidPubKey = builtInKey || (savedProjectKey.project === project
+        ? savedProjectKey.key : readProjectPushKey(project));
+      const [keyDraft, setKeyDraft] = useState(null);
+      const displayedPushKey = !builtInKey && keyDraft?.project === project ? keyDraft.key : vapidPubKey;
       const [pushSyncStatus, setPushSyncStatus] = useState('idle');
       const [savedPushLanguage, setSavedPushLanguage] = useState('');
       const [pushRetry, setPushRetry] = useState(0);
@@ -1210,9 +1277,11 @@
           child: ['Open the school’s parent link and link your child to receive ride alerts.', '실제 승하차 알림은 학교의 학부모 링크로 접속해 아이를 연결하면 받을 수 있어요.'],
           cloud: ['Open the parent QR link with school cloud settings.', '학교 서버 연결이 필요합니다. 관리자 화면에서 발급한 학부모 QR 링크로 접속해 주세요.'],
           key: ['The school’s Web Push public key is missing. Use an updated parent QR link.', '학교의 푸시 공개키가 없습니다. 관리자가 공개키를 저장한 뒤 새 학부모 QR 링크로 접속해 주세요.'],
+          invalidKey: ['The school’s push key is invalid. Check the school settings.', '학교 푸시 공개키가 유효하지 않습니다. 학교 설정을 확인해 주세요.'],
           syncing: ['Registering this phone with the school…', '학교 서버에 이 휴대폰을 등록하는 중입니다.'],
           registered: ['This phone is registered. Push language saved at school: English.', '학교 서버에 이 휴대폰의 푸시 언어를 한국어로 저장했어요.'],
-          rejected: ['The school server did not save this subscription. Tap the test button to retry.', '학교 서버에 푸시 구독을 저장하지 못했습니다. 테스트 버튼을 눌러 다시 시도해 주세요.'],
+          rejected: ['The school could not update this phone’s push registration. Tap the test button to retry.', '학교 서버에 푸시 구독 변경 사항을 저장하지 못했습니다. 테스트 버튼을 눌러 다시 시도해 주세요.'],
+          unverified: ['Subscription saved. This phone’s school push key could not be verified.', '구독은 저장했으나 이 휴대폰에 등록된 학교 푸시 공개키는 확인할 수 없습니다.'],
           unsupported: ['This browser does not support background push.', '이 브라우저에서는 앱을 닫은 뒤 푸시를 받을 수 없습니다.'],
           failed: ['Could not register this phone for background push. Check the school’s public key and retry.', '휴대폰의 푸시 구독에 실패했습니다. 학교의 푸시 공개키를 확인하고 다시 시도해 주세요.']
         };
@@ -1975,17 +2044,15 @@
           setPushSyncStatus('syncing');
           try {
             const reg = await schoolTapReceiver.active();
-            let sub = await reg.pushManager.getSubscription();
+            const canRegister = () => !cancelled && !unlinkInProgress.current && Notification.permission === 'granted';
+            const removeOldEndpoint = async endpoint => {
+              const { error } = await client.from('schooltap_push_subscriptions').delete()
+                .eq('school_id', schoolId).eq('endpoint', endpoint);
+              return !error;
+            };
+            const { sub, status } = await preparePushSubscription(reg.pushManager, vapidPubKey, removeOldEndpoint, canRegister);
             if (cancelled) return;
-            if (!sub) {
-              if (!validPushPublicKey(vapidPubKey)) { setPushSyncStatus('key'); return; }
-              const raw = atob(vapidPubKey.replace(/-/g, '+').replace(/_/g, '/'));
-              sub = await reg.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: Uint8Array.from(raw, char => char.charCodeAt(0))
-              });
-            }
-            if (cancelled) return;
+            if (!sub) { setPushSyncStatus(status); return; }
             const preferred = localStorage.getItem('schooltap_preferred_lang');
             if ((preferred === 'en' || preferred === 'ko') && preferred !== lang) return;
             const json = { ...sub.toJSON(), lang };
@@ -1997,7 +2064,7 @@
             const { error } = await client.from('schooltap_push_subscriptions').upsert(rows, { onConflict: 'id' });
             if (!cancelled) {
               if (!error) setSavedPushLanguage(lang);
-              setPushSyncStatus(error ? 'rejected' : 'registered');
+              setPushSyncStatus(error ? 'rejected' : status);
             }
           } catch {
             if (!cancelled) setPushSyncStatus('failed');
@@ -2559,7 +2626,7 @@
 
       const buildRoleUrl = (roleType, inviteCodeOpt = '') => {
         let u = `${effectiveBaseUrl}?role=${roleType}&schoolId=${encodeURIComponent(schoolId)}&lang=${lang}&sbUrl=${encodeURIComponent(sbUrl)}&sbKey=${encodeURIComponent(sbKey)}`;
-        if (roleType === 'PARENT' && validPushPublicKey(vapidPubKey)) {
+        if (['PARENT', 'READER'].includes(roleType) && validPushPublicKey(vapidPubKey)) {
           u += '&vapid=' + encodeURIComponent(vapidPubKey);
         }
         if (inviteCodeOpt) {
@@ -4052,7 +4119,8 @@
 
                 <label className="block space-y-1 text-xs font-bold text-slate-700">
                   <span>{isEn ? 'School Web Push public key (VAPID)' : '학교 푸시 공개키 (VAPID Public Key)'}</span>
-                  <input type="text" value={vapidPubKey} onChange={e => setVapidPubKey(e.target.value.trim())}
+                  <input type="text" value={displayedPushKey} readOnly={Boolean(builtInKey)}
+                    onChange={e => setKeyDraft({ project, key: e.target.value.trim() })}
                     autoComplete="off" spellCheck={false}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono" />
                   {vapidPubKey && !validPushPublicKey(vapidPubKey) && <span role="status">
@@ -4119,11 +4187,15 @@
 
                 <button
                   onClick={() => {
-                    if (vapidPubKey && !validPushPublicKey(vapidPubKey)) {
+                    if (displayedPushKey && !validPushPublicKey(displayedPushKey)) {
                       showToast(isEn ? 'Check the Web Push public key.' : '푸시 공개키 형식을 확인해 주세요.');
                       return;
                     }
-                    localStorage.setItem('schooltap_vapid_pub', vapidPubKey);
+                    if (!builtInKey) {
+                      localStorage.setItem(projectPushStorageKey(project), displayedPushKey);
+                      setSavedProjectKey({ project, key: displayedPushKey });
+                    }
+                    setKeyDraft(null);
                     localStorage.setItem('schooltap_sb_url', sbUrl.trim());
                     localStorage.setItem('schooltap_sb_key', sbKey.trim());
                     setCloudModalOpen(false);
