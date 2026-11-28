@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(16), 0, dp(4), 0);
         TextView title = new TextView(this);
-        title.setText("SchoolTap  ·  차량용");
+        title.setText(R.string.reader_title);
         title.setTextColor(Color.rgb(33, 36, 42));
         title.setTextSize(16);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -101,7 +101,7 @@ public final class MainActivity extends Activity {
         Button menuButton = new Button(this, null, android.R.attr.borderlessButtonStyle);
         menuButton.setText("⋮");
         menuButton.setTextSize(22);
-        menuButton.setContentDescription("차량 단말기 메뉴");
+        menuButton.setContentDescription(getString(R.string.device_menu));
         menuButton.setOnClickListener(this::showMenu);
         bar.addView(menuButton, dp(48), dp(48));
         container.addView(bar);
@@ -133,17 +133,17 @@ public final class MainActivity extends Activity {
 
     private void showMenu(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add("NFC 설정").setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(R.string.nfc_settings).setOnMenuItemClickListener(item -> {
             Intent intent = new Intent(Settings.ACTION_NFC_SETTINGS);
             if (intent.resolveActivity(getPackageManager()) == null)
                 intent = new Intent(Settings.ACTION_WIRELESS_SETTINGS);
             try { startActivity(intent); } catch (android.content.ActivityNotFoundException unavailable) {
-                new AlertDialog.Builder(this).setMessage("기기 설정에서 NFC를 켜 주세요.")
-                        .setPositiveButton("확인", null).show();
+                new AlertDialog.Builder(this).setMessage(R.string.enable_nfc)
+                        .setPositiveButton(android.R.string.ok, null).show();
             }
             return true;
         });
-        menu.getMenu().add("단말기 연결 변경").setOnMenuItemClickListener(item -> { showSetup(); return true; });
+        menu.getMenu().add(R.string.change_link).setOnMenuItemClickListener(item -> { showSetup(); return true; });
         menu.show();
     }
 
@@ -161,7 +161,7 @@ public final class MainActivity extends Activity {
             if (page != web || failed || !bootstrapping) return;
             bootstrapping = false;
             if ("true".equals(ok)) page.loadUrl(target.toString());
-            else loadFailed("기기 저장공간을 준비하지 못했어요.");
+            else loadFailed(R.string.storage_error);
         });
     }
 
@@ -176,7 +176,7 @@ public final class MainActivity extends Activity {
             if (bootstrapping && INIT.equals(url)) return;
             if (!VehicleNfc.isReader(Uri.parse(url))) {
                 page.stopLoading();
-                loadFailed("공식 차량 단말기 링크만 열 수 있어요.");
+                loadFailed(R.string.wrong_link);
             }
         }
         @Override public void onPageFinished(WebView page, String url) {
@@ -185,19 +185,19 @@ public final class MainActivity extends Activity {
             if (VehicleNfc.isReader(Uri.parse(url)) && url.equals(page.getUrl())) nfc.install(page);
         }
         @Override public void onReceivedError(WebView page, WebResourceRequest req, WebResourceError error) {
-            if (page == web && req.isForMainFrame()) loadFailed("인터넷 연결을 확인하고 다시 시도해 주세요.");
+            if (page == web && req.isForMainFrame()) loadFailed(R.string.network_error);
         }
         @Override public void onReceivedHttpError(WebView page, WebResourceRequest req, WebResourceResponse resp) {
             if (page == web && req.isForMainFrame() && resp.getStatusCode() >= 400)
-                loadFailed("스쿨탭 서버에서 차량 화면을 불러오지 못했어요.");
+                loadFailed(R.string.http_error);
         }
         @Override public boolean onRenderProcessGone(WebView page, RenderProcessGoneDetail detail) {
-            if (page == web) loadFailed("차량 화면을 다시 열어 주세요.");
+            if (page == web) loadFailed(R.string.render_error);
             return true;
         }
     }
 
-    private void loadFailed(String message) {
+    private void loadFailed(int message) {
         if (failed || inSetup) return;
         failed = true;
         releaseReader();
@@ -211,7 +211,7 @@ public final class MainActivity extends Activity {
         label.setTextSize(17);
         notice.addView(label);
         Button retry = new Button(this);
-        retry.setText("다시 열기");
+        retry.setText(R.string.retry_reader);
         retry.setOnClickListener(v -> openReader(launchUri));
         notice.addView(retry);
         content.addView(notice);
