@@ -85,7 +85,8 @@ try {
         '--debug-mode', '--java', $generated, '-o', $resourceApk, $resourceZip)
 
     $sources = Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'java'), $generated -Recurse -File -Filter '*.java'
-    $javacArgs = @('-encoding', 'UTF-8', '-source', '8', '-target', '8', '-bootclasspath', $platform, '-d', $classes)
+    $bootPath = $platform + [IO.Path]::PathSeparator + (Join-Path $tools 'core-lambda-stubs.jar')
+    $javacArgs = @('-encoding', 'UTF-8', '-source', '8', '-target', '8', '-bootclasspath', $bootPath, '-d', $classes)
     Invoke-Checked (Get-JdkTool 'javac') ($javacArgs + @($sources.FullName))
     $classesJar = Join-Path $scratch 'classes.jar'
     Invoke-Checked (Get-JdkTool 'jar') @('cf', $classesJar, '-C', $classes, '.')
@@ -103,9 +104,16 @@ try {
     Invoke-Checked (Get-SdkTool 'zipalign') @('-p', '-f', '4', $resourceApk, $aligned)
 
     if (!(Test-Path -LiteralPath $Keystore -PathType Leaf)) {
-        Invoke-Checked (Get-JdkTool 'keytool') @('-genkeypair', '-keystore', $Keystore, '-storetype', 'JKS',
-            '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-keyalg', 'RSA',
-            '-keysize', '2048', '-validity', '10000', '-dname', 'CN=SchoolTap Pilot, O=SchoolTap, C=KR')
+        $newKey = [IO.Path]::GetFullPath($Keystore) + '.' + [Guid]::NewGuid().ToString('N')
+        try {
+            Invoke-Checked (Get-JdkTool 'keytool') @('-genkeypair', '-keystore', $newKey, '-storetype', 'JKS',
+                '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-keyalg', 'RSA',
+                '-keysize', '2048', '-validity', '10000', '-dname', 'CN=SchoolTap Pilot, O=SchoolTap, C=KR')
+            try { [IO.File]::Move($newKey, [IO.Path]::GetFullPath($Keystore)) }
+            catch [IO.IOException] { if (!(Test-Path -LiteralPath $Keystore -PathType Leaf)) { throw } }
+        } finally {
+            if ([IO.File]::Exists($newKey)) { [IO.File]::Delete($newKey) }
+        }
     }
     $signed = Join-Path $scratch 'signed.apk'
     $signerJar = Join-Path $tools 'lib/apksigner.jar'
