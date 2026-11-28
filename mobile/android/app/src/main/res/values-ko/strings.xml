@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">스쿨탭 차량용</string>
+    <string name="reader_title">SchoolTap  ·  차량용</string>
+    <string name="device_menu">차량 단말기 메뉴</string>
+    <string name="nfc_settings">NFC 설정</string>
+    <string name="enable_nfc">기기 설정에서 NFC를 켜 주세요.</string>
+    <string name="change_link">단말기 연결 변경</string>
+    <string name="storage_error">기기 저장공간을 준비하지 못했어요.</string>
+    <string name="wrong_link">공식 차량 단말기 링크만 열 수 있어요.</string>
+    <string name="network_error">인터넷 연결을 확인하고 다시 시도해 주세요.</string>
+    <string name="http_error">스쿨탭 서버에서 차량 화면을 불러오지 못했어요.</string>
+    <string name="render_error">차량 화면을 다시 열어 주세요.</string>
+    <string name="retry_reader">다시 열기</string>
+</resources>

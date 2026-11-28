@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SchoolTap Bus Reader</string>
+    <string name="reader_title">SchoolTap  ·  Bus reader</string>
+    <string name="device_menu">Bus reader menu</string>
+    <string name="nfc_settings">NFC settings</string>
+    <string name="enable_nfc">Turn on NFC in the device settings.</string>
+    <string name="change_link">Change reader connection</string>
+    <string name="storage_error">The reader could not prepare device storage.</string>
+    <string name="wrong_link">Open the official SchoolTap bus reader link.</string>
+    <string name="network_error">Check your internet connection and try again.</string>
+    <string name="http_error">The SchoolTap reader page could not be loaded.</string>
+    <string name="render_error">Reopen the bus reader.</string>
+    <string name="retry_reader">Retry</string>
+</resources>

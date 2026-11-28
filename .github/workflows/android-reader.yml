@@ -1,0 +1,40 @@
+name: SchoolTap Android reader
+
+on:
+  push:
+    paths:
+      - 'mobile/android/**'
+      - '.github/workflows/android-reader.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pilot-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Ensure Android build tools are present
+        run: |
+          if [[ ! -f "$ANDROID_HOME/platforms/android-36/android.jar" || ! -f "$ANDROID_HOME/build-tools/36.0.0/lib/d8.jar" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
+          fi
+      - name: Run reader tests
+        run: node --test mobile/android/tests/*.test.cjs
+      - name: Build pilot APK
+        shell: pwsh
+        run: ./mobile/android/build-apk.ps1
+      - name: Verify APK signature
+        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose mobile/android/build/SchoolTap-Reader-debug.apk'
+      - name: Save APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SchoolTap-Android-Reader
+          path: mobile/android/build/SchoolTap-Reader-debug.apk
+          if-no-files-found: error
