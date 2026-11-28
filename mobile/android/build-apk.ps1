@@ -81,7 +81,7 @@ try {
     $resourceApk = Join-Path $scratch 'resources.apk'
     Invoke-Checked (Get-SdkTool 'aapt2') @('compile', '--dir', (Join-Path $sourceRoot 'res'), '-o', $resourceZip)
     Invoke-Checked (Get-SdkTool 'aapt2') @('link', '--manifest', $manifestFile, '-I', $platform, '-A', (Join-Path $sourceRoot 'assets'),
-        '--min-sdk-version', '24', '--target-sdk-version', '36', '--version-code', '1', '--version-name', '0.1.0',
+        '--min-sdk-version', '24', '--target-sdk-version', '36', '--version-code', '2', '--version-name', '0.1.1',
         '--debug-mode', '--java', $generated, '-o', $resourceApk, $resourceZip)
 
     $sources = Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'java'), $generated -Recurse -File -Filter '*.java'

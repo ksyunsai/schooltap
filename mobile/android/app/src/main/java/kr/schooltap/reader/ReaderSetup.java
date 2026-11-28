@@ -45,7 +45,8 @@ final class ReaderSetup {
     private ReaderSetup() {}
 
     static Uri saved(Context context) {
-        return validated(preferences(context).getString(LINK, ""));
+        return validated(preferences(context).getString(LINK, ""),
+                context.getString(R.string.schooltap_vapid_public_key));
     }
 
     private static SharedPreferences preferences(Context context) {
@@ -53,7 +54,7 @@ final class ReaderSetup {
     }
 
     /** Rebuild the URL rather than sending arbitrary parameters or fragments to the web app. */
-    static Uri validated(String input) {
+    static Uri validated(String input, String projectPushKey) {
         if (input == null || input.length() > 8192) return null;
         String raw = input.trim();
         try {
@@ -79,6 +80,10 @@ final class ReaderSetup {
                     .appendQueryParameter("role", "READER").appendQueryParameter("schoolId", school)
                     .appendQueryParameter("sbUrl", BACKEND).appendQueryParameter("sbKey", key);
             if (!lang.isEmpty()) result.appendQueryParameter("lang", lang);
+            // Provisioning targets one project. Its current public key also repairs saved links from 0.1.0.
+            String vapid = publicPushKey(projectPushKey);
+            if (vapid.isEmpty()) vapid = publicPushKey(single(source, "vapid"));
+            if (!vapid.isEmpty()) result.appendQueryParameter("vapid", vapid);
             return result.build();
         } catch (URISyntaxException | IllegalArgumentException | JSONException invalid) {
             return null;
@@ -89,6 +94,14 @@ final class ReaderSetup {
         List<String> values = uri.getQueryParameters(name);
         if (values.size() > 1) throw new IllegalArgumentException("Repeated parameter");
         return values.isEmpty() ? "" : values.get(0);
+    }
+
+    /** Web Push uses an uncompressed P-256 public point in URL-safe base64. */
+    private static String publicPushKey(String candidate) {
+        if (!candidate.matches("B[A-Za-z0-9_-]{86}=?")) return "";
+        byte[] bytes = Base64.decode(candidate, Base64.URL_SAFE | Base64.NO_WRAP);
+        if (bytes.length != 65 || bytes[0] != 4) return "";
+        return Base64.encodeToString(bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
     }
 
     private static boolean publicClientKey(String key) throws JSONException {
@@ -152,7 +165,7 @@ final class ReaderSetup {
         connect.setBackgroundTintList(ColorStateList.valueOf(AMBER));
         form.addView(connect, row(activity, 16));
         connect.setOnClickListener(v -> {
-            Uri link = validated(field.getText().toString());
+            Uri link = validated(field.getText().toString(), activity.getString(R.string.schooltap_vapid_public_key));
             if (link == null) {
                 field.setError(ko ? "관리자 화면에서 복사한 스쿨탭 차량 단말기 링크를 붙여넣으세요."
                         : "Paste the SchoolTap bus reader link copied from the admin screen.");
